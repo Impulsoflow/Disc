@@ -1,0 +1,768 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pesquisa Impulso DISC</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/2.4.0/purify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@700&family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+  <style>
+    body {
+      background: linear-gradient(135deg, #a5f3fc, #06b6d4);
+      font-family: 'Inter', sans-serif;
+    }
+    .scale-option {
+      transition: all 0.2s ease;
+      border: 2px solid #cbd5e1;
+      border-radius: 8px;
+      padding: 8px;
+      text-align: center;
+      cursor: pointer;
+      background-color: #f8fafc;
+      font-weight: 600;
+    }
+    .scale-option:hover {
+      background-color: #e0f2fe;
+      border-color: #38bdf8;
+    }
+    .scale-option:active {
+      transform: scale(1.1);
+    }
+    .scale-option.selected {
+      background: linear-gradient(135deg, #3b82f6, #1e40af);
+      color: white;
+      border-color: #1e40af;
+    }
+    .btn-primary { background: linear-gradient(135deg, #3b82f6, #1e40af); transition: transform 0.1s ease; }
+    .btn-primary:active { transform: scale(1.1); }
+    .btn-secondary { background: linear-gradient(135deg, #6b7280, #4b5563); }
+    .btn-result { background: linear-gradient(135deg, #ec4899, #be185d); transition: transform 0.1s ease; }
+    .btn-result:active { transform: scale(1.1); }
+    .btn-start { background: linear-gradient(135deg, #22d3ee, #0ea5e9); }
+    .signature { font-family: 'Dancing Script', cursive; color: #0ea5e9; font-size: 1.4rem; }
+    .alert-blink {
+      animation: blink 1.2s infinite;
+      background: linear-gradient(135deg, #dbeafe, #bfdbfe);
+      border-left: 4px solid #3b82f6;
+      padding: 10px;
+      border-radius: 8px;
+      margin-top: 10px;
+      font-weight: 600;
+      color: #1e40af;
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+    .input-icon { position: relative; }
+    .input-icon svg {
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 20px;
+      height: 20px;
+      color: #4b5563;
+    }
+    .input-icon input { padding-left: 40px; }
+    .progress-bar {
+      height: 8px;
+      background: #e5e7eb;
+      border-radius: 4px;
+      overflow: hidden;
+      margin-top: 12px;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #3b82f6, #0ea5e9);
+      transition: width 0.3s ease;
+    }
+    #scores canvas {
+      max-width: 400px !important; /* Controla o diâmetro do gráfico */
+      height: 400px !important; /* Define a altura do gráfico */
+      margin: 0 auto; /* Centraliza o gráfico */
+    }
+  </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+  <div class="max-w-3xl w-full bg-white rounded-2xl shadow-xl p-6 md:p-8">
+    <h2 class="text-3xl md:text-4xl font-bold text-center text-transparent bg-clip-text bg-gradient-to-r from-teal-500 to-blue-600 mb-2">Impulso Coaching</h2>
+    <h1 class="text-4xl md:text-5xl font-extrabold text-center text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-teal-500 mb-4">Pesquisa Impulso DISC</h1>
+    <p class="text-center text-gray-600 mb-6">A Mudança Pode Acontecer Em Um Instante</p>
+    <div id="intro">
+      <div class="bg-gradient-to-r from-blue-100 to-teal-100 p-5 rounded-lg mb-4 shadow-md">
+        <p class="text-lg font-semibold text-gray-800 mb-3">Dados Pessoais</p>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+          <div class="input-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+            </svg>
+            <input type="text" id="name" placeholder="Nome *" class="border border-teal-300 rounded-lg p-2 w-full focus:outline-none focus:ring-2 focus:ring-teal-500 bg-gradient-to-r from-white to-teal-50" />
+          </div>
+          <div class="input-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+            </svg>
+            <input type="number" id="age" placeholder="Idade *" class="border border-teal-300 rounded-lg p-2 w-full focus:outline-none focus:ring-2 focus:ring-teal-500 bg-gradient-to-r from-white to-teal-50" />
+          </div>
+          <div class="input-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+            </svg>
+            <input type="text" id="occupation" placeholder="Profissão" class="border border-teal-300 rounded-lg p-2 w-full focus:outline-none focus:ring-2 focus:ring-teal-500 bg-gradient-to-r from-white to-teal-50" />
+          </div>
+        </div>
+        <div class="input-icon">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+          </svg>
+          <input type="email" id="email" placeholder="Email *" class="border border-teal-300 rounded-lg p-2 w-full focus:outline-none focus:ring-2 focus:ring-teal-500 bg-gradient-to-r from-white to-teal-50" />
+        </div>
+        <div class="flex justify-end mt-3">
+          <button onclick="startTest()" class="btn-start text-white px-5 py-2 rounded-lg transition shadow-md text-sm md:text-base">Iniciar Pesquisa</button>
+        </div>
+      </div>
+      <div class="alert-blink text-center text-sm md:text-base">
+        <p class="font-bold">Dicas para Responder</p>
+        <ul class="list-disc list-inside mt-1 space-y-1">
+          <li>Seja honesto: responda como você realmente é.</li>
+          <li>Pense em situações do seu cotidiano.</li>
+          <li>Escolha a afirmação que melhor te descreve.</li>
+          <li>Não há respostas certas ou erradas!</li>
+        </ul>
+      </div>
+    </div>
+    <div id="test-section" class="hidden">
+      <div id="current-question"></div>
+    </div>
+    <div id="result" class="hidden mt-4">
+      <div class="bg-gradient-to-r from-blue-50 to-teal-50 p-4 rounded-lg shadow-md mb-4">
+        <h2 class="text-2xl font-extrabold text-center text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-teal-500 mb-2">Pesquisa Impulso DISC</h2>
+        <p class="text-center text-gray-700 text-sm mb-2" id="personal-data"></p>
+        <p class="text-center text-gray-700 text-sm">Explore como suas características se distribuem nas quatro dimensões do DISC e descubra seus pontos fortes e áreas de melhoria.</p>
+      </div>
+      <div id="scores" class="bg-gray-50 rounded-lg p-4 mb-6">
+        <canvas id="resultChart"></canvas>
+      </div>
+      <div id="dominant-section" class="mt-4 space-y-3"></div>
+      <div id="disc-explanation" class="bg-gradient-to-r from-blue-100 to-teal-100 p-4 rounded-lg mt-4 shadow-md">
+        <p class="text-lg font-semibold text-gray-800 mb-2">O que é o DISC?</p>
+        <p class="text-gray-700 text-xs">
+          O DISC® é uma metodologia de avaliação comportamental desenvolvida com base nos estudos de William Marston...
+        </p>
+      </div>
+      <p class="text-right mt-4 text-xl signature">Rogério Braga - impulsoflow@gmail.com</p>
+    </div>
+  </div>
+  <script>
+    // === AFIRMAÇÕES CORRIGIDAS POR PERFIL ===
+    const affirmations = [
+      "Enfrento desafios de frente e tomo decisões rápidas.", // D
+      "Adoro conhecer pessoas novas e criar conexões.", // I
+      "Prefiro um ambiente calmo e previsível, onde todos se apoiam.", // S
+      "Reviso tudo com cuidado para garantir que esteja 100% correto.", // C
+      "Sou direto e focado em resultados, mesmo que isso gere conflito.", // D
+      "Meu entusiasmo é contagiante e motiva os outros a agir.", // I
+      "Sou paciente e um bom ouvinte, especialmente em momentos difíceis.", // S
+      "Sigo regras e procedimentos com rigor e consistência.", // C
+      "Assumo riscos calculados para atingir objetivos ambiciosos.", // D
+      "Gosto de ser o centro das atenções e receber reconhecimento.", // I
+      "Valorizo a harmonia e evito conflitos sempre que possível.", // S
+      "Minhas decisões são baseadas em dados, fatos e análise lógica.", // C
+      "Sou competitivo e orientado para vencer.", // D
+      "Sou carismático, falante e animado em qualquer ambiente.", // I
+      "Sou leal às pessoas e às causas em que acredito.", // S
+      "Sou organizado, sistemático e orientado para detalhes.", // C
+      "Questiono o 'status quo' e busco maneiras mais eficientes.", // D
+      "Confio na minha intuição e no meu 'feeling' sobre as pessoas.", // I
+      "Gosto de oferecer apoio prático e ajudar nos bastidores.", // S
+      "Preciso de explicações claras e de um motivo lógico para mudanças.", // C
+      "Sob pressão, assumo o comando e sou assertivo.", // D
+      "Uso o humor e a criatividade para aliviar tensões.", // I
+      "Internalizo o estresse para evitar conflitos abertos.", // S
+      "Sob pressão, me retrai e foco nos dados para encontrar soluções.", // C
+      "Busco autoridade e autonomia no meu ambiente.", // D
+      "Gosto de motivar e inspirar os outros a agir.", // I
+      "Preciso de tempo para me adaptar a mudanças significativas.", // S
+      "Posso ser crítico quando os padrões de qualidade não são atendidos.", // C
+      "Impaciência é um desafio para mim, especialmente com indecisão.", // D
+      "Temo a rejeição social e me esforço para ser querido.", // I
+      "Valorizo a sinceridade e a confiança acima de tudo.", // S
+      "Temo cometer erros e ser pego despreparado.", // C
+      "Prefiro variedade e ação a rotinas estáveis.", // D
+      "Sou descrito como otimista e cheio de ideias.", // I
+      "Prefiro seguir métodos comprovados a experimentar o novo.", // S
+      "Minha comunicação é formal, precisa e baseada em lógica.", // C
+      "Foco no resultado final, mesmo que negligencie detalhes.", // D
+      "Tenho facilidade em usar entusiasmo para persuadir os outros.", // I
+      "Sou diplomático e evito confrontos desnecessários.", // S
+      "Sigo padrões estabelecidos para garantir qualidade.", // C
+      "Decido rápido e com confiança, mesmo em momentos de pressão.", // D
+      "Me energizo ao interagir e colaborar com pessoas.", // I
+      "Sou metódico e prefiro concluir uma tarefa antes de iniciar outra.", // S
+      "Sou naturalmente organizado e orientado para detalhes.", // C
+      "Encaro problemas de cabeça erguida, sem recuar.", // D
+      "Trago humor e crio um clima positivo ao meu redor.", // I
+      "Colaboro com colegas, mesmo em pontos de discordância.", // S
+      "Baseio minhas escolhas em análises de dados claras.", // C
+    ];
+    let current = 0;
+    const responses = new Array(48).fill(null);
+    function sanitize(str) {
+      return DOMPurify.sanitize(str);
+    }
+    function validateEmail(email) {
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    }
+    function startTest() {
+      const name = document.getElementById('name').value.trim();
+      const age = document.getElementById('age').value.trim();
+      const email = document.getElementById('email').value.trim();
+      if (!name || !age || !email || !validateEmail(email)) {
+        alert('Preencha todos os campos corretamente.');
+        return;
+      }
+      document.getElementById('intro').classList.add('hidden');
+      document.getElementById('test-section').classList.remove('hidden');
+      loadQuestion(0);
+    }
+    function loadQuestion(index) {
+      current = index;
+      const qNum = index + 1;
+      const progress = Math.round(((qNum - 1) / 48) * 100);
+      const html = `
+        <div class="bg-gradient-to-r from-blue-50 to-teal-50 p-5 rounded-lg shadow-md">
+          <p class="text-lg font-semibold text-gray-800 mb-4">Pergunta ${String(qNum).padStart(2, '0')} de 48</p>
+          <p class="text-2xl font-bold text-center mb-6">"${affirmations[index]}"</p>
+          <div class="grid grid-cols-5 gap-2 mb-6">
+            ${[1,2,3,4,5].map(val => `
+              <div class="scale-option" data-value="${val}" onclick="selectAnswer(${qNum}, ${val})">
+                ${val}<br><small>${val === 1 ? 'Discordo totalmente' : val === 2 ? 'Discordo' : val === 3 ? 'Neutro' : val === 4 ? 'Concordo' : 'Concordo totalmente'}</small>
+              </div>
+            `).join('')}
+          </div>
+          <div class="flex flex-col items-center">
+            ${index < 47 ? 
+              `<button onclick="nextQuestion(${index})" class="btn-primary text-white px-6 py-3 rounded-lg text-base ${responses[index] === null ? 'opacity-50 cursor-not-allowed' : ''}">Próxima</button>` :
+              `<button onclick="showResult()" class="btn-result text-white px-6 py-3 rounded-lg text-base ${responses[index] === null ? 'opacity-50 cursor-not-allowed' : ''}">Ver Resultado</button>`
+            }
+            ${index > 0 ? `<button onclick="loadQuestion(${index - 1})" class="btn-secondary text-white px-4 py-2 rounded-lg text-sm mt-2">Anterior</button>` : ``}
+          </div>
+          <div class="progress-bar">
+            <div class="progress-bar-fill" style="width: ${progress}%"></div>
+          </div>
+        </div>
+        <input type="hidden" id="q${qNum}" value="${responses[index] || ''}">
+      `;
+      document.getElementById('current-question').innerHTML = html;
+      if (responses[index] !== null) {
+        document.querySelector(`.scale-option[data-value="${responses[index]}"]`).classList.add('selected');
+      }
+    }
+    function selectAnswer(qNum, value) {
+      responses[qNum - 1] = value;
+      document.querySelectorAll('.scale-option').forEach(el => el.classList.remove('selected'));
+      document.querySelector(`.scale-option[data-value="${value}"]`).classList.add('selected');
+      document.getElementById(`q${qNum}`).value = value;
+    }
+    function nextQuestion(index) {
+      if (responses[index] === null) {
+        alert('Selecione uma opção antes de continuar.');
+        return;
+      }
+      loadQuestion(index + 1);
+    }
+    // === EXPLICAÇÃO DETALHADA DO DISC ===
+    const discExplanationFull = `O DISC® é uma metodologia de avaliação comportamental desenvolvida com base nos estudos do psicólogo William Moulton Marston na década de 1920. A ferramenta categoriza os comportamentos humanos em quatro dimensões principais:
+- Dominância (D): Como a pessoa lida com desafios e problemas.
+- Influência (I): Como a pessoa interage com outras pessoas e influencia.
+- Estabilidade (S): Como a pessoa responde a mudanças e ritmo.
+- Conformidade (C): Como a pessoa segue regras, procedimentos e padrões.
+O DISC não mede inteligência, valores ou habilidades técnicas, mas sim tendências comportamentais naturais. É amplamente utilizado em:
+• Desenvolvimento de liderança
+• Formação de equipes
+• Recrutamento e seleção
+• Coaching individual
+• Resolução de conflitos
+Mais de 53 milhões de pessoas já utilizaram o DISC em mais de 38 anos de aplicação global.`;
+    // === IMPORTÂNCIA DA ANÁLISE DISC ===
+    const discImportance = `A análise DISC é uma ferramenta poderosa para o autoconhecimento e o desenvolvimento pessoal e profissional. Ao identificar suas tendências comportamentais, você ganha clareza sobre como interage com os outros, enfrenta desafios e toma decisões. Essa compreensão permite ajustar sua comunicação, melhorar relacionamentos e alinhar suas forças a papéis e ambientes onde você pode prosperar. No contexto profissional, o DISC otimiza a formação de equipes, fortalece a liderança e aumenta a produtividade ao promover colaborações mais harmoniosas e eficazes. Para indivíduos, é um guia para o crescimento, ajudando a superar limitações e maximizar o impacto positivo em suas ações diárias.`;
+    // === PERFIS COMPLETOS ===
+    const fullProfiles = {
+      D: {
+        name: "Dominância (Colérico)",
+        desc: "Indivíduos com perfil Dominante são movidos por desafios, resultados e controle. São líderes naturais que tomam decisões rápidas, enfrentam obstáculos com coragem e preferem ambientes onde podem agir com autonomia. Têm foco intenso em metas e não se intimidam diante de conflitos ou pressão. No ambiente profissional, destacam-se em papéis que exigem iniciativa, coragem e capacidade de resolver problemas complexos sob estresse.",
+        qualities: "Coragem para tomar decisões difíceis, iniciativa para agir sem esperar instruções, foco implacável em resultados, assertividade na comunicação, liderança por exemplo, resiliência sob pressão, capacidade de assumir riscos calculados, energia para impulsionar mudanças, objetividade ao cortar caminho, persistência diante de obstáculos.",
+        weaknesses: "Impaciência com processos lentos ou burocráticos, tendência a ser autoritário ou insensível às emoções alheias, dificuldade em delegar tarefas por medo de perda de controle, negligência de detalhes em prol da velocidade, reação defensiva a críticas, dificuldade em ouvir opiniões contrárias, tendência a criar conflitos desnecessários por impulso, frustração com indecisão alheia, foco excessivo em metas a ponto de ignorar relações interpessoais, resistência a feedbacks que questionem sua autoridade.",
+        development: "Pratique escuta ativa: pare, olhe nos olhos e ouça sem interromper. Desenvolva empatia: pergunte como os outros se sentem antes de agir. Aprenda a delegar com confiança: defina claramente o resultado esperado, mas permita liberdade no caminho. Respire antes de reagir sob pressão. Busque feedback regularmente, especialmente de pessoas que pensam diferente. Lembre-se: resultados sustentáveis nascem de equipes engajadas, não apenas de decisões rápidas.",
+        color: "#ef4444"
+      },
+      I: {
+        name: "Influência (Sanguíneo)",
+        desc: "Pessoas com perfil Influente são extrovertidas, entusiasmadas e naturalmente persuasivas. Energizam-se com interação social, criam conexões com facilidade e usam seu carisma para motivar os outros. São otimistas, criativas e adoram compartilhar ideias. No trabalho, brilham em funções que envolvem comunicação, vendas, ensino ou qualquer atividade que exija engajar pessoas. Sua maior força é a capacidade de inspirar e criar ambientes positivos, mesmo em momentos difíceis.",
+        qualities: "Carisma e presença marcante, habilidade de comunicação verbal e não verbal, otimismo contagiante, criatividade para gerar ideias, entusiasmo que motiva equipes, facilidade em construir relacionamentos, capacidade de vender ideias ou produtos, flexibilidade para se adaptar a novos contextos, senso de humor que alivia tensões, energia para iniciar projetos com paixão.",
+        weaknesses: "Desorganização e procrastinação em tarefas rotineiras, impulsividade ao tomar decisões sem analisar dados, dificuldade em manter foco em atividades analíticas ou de longo prazo, tendência a prometer mais do que pode entregar, sensibilidade excessiva à rejeição ou críticas, evitação de conflitos difíceis por medo de perder popularidade, distração fácil com novidades, dificuldade em cumprir prazos sem supervisão, foco excessivo em aprovação externa, negligência de detalhes técnicos importantes.",
+        development: "Desenvolva disciplina: use agendas, listas de tarefas e lembretes. Pratique foco: defina blocos de tempo para tarefas analíticas sem distrações. Aceite feedbacks críticos como oportunidades de crescimento, não como ataques pessoais. Cumpra promessas: subestime sua capacidade ao comprometer-se. Equilibre entusiasmo com planejamento: antes de agir, pergunte 'quais dados apoiam esta ideia?'.",
+        color: "#f59e0b"
+      },
+      S: {
+        name: "Estabilidade (Fleumático)",
+        desc: "Indivíduos com perfil Estável são pacientes, leais e profundamente colaborativos. Valorizam a harmonia, a confiança e a estabilidade em seus relacionamentos e ambientes de trabalho. São ouvintes atentos, oferecem apoio constante e evitam conflitos sempre que possível. Preferem rotinas previsíveis e mudanças graduais. Sua força está na capacidade de criar ambientes seguros, onde todos se sentem acolhidos e respeitados. São a 'cola' que mantém equipes unidas em tempos de crise.",
+        qualities: "Paciência excepcional em situações de tensão, lealdade inabalável a pessoas e causas, empatia genuína para compreender sentimentos alheias, trabalho em equipe com foco no coletivo, escuta ativa sem julgamento, confiabilidade para cumprir compromissos, calma sob pressão que acalma os outros, consistência no desempenho, diplomacia para mediar conflitos, apoio prático e discreto.",
+        weaknesses: "Resistência a mudanças repentinas ou radicais, passividade que evita confrontar problemas, dificuldade em dizer 'não' por medo de desagradar, lentidão em tomar decisões por medo de errar, tendência a suprimir próprias opiniões para manter a paz, dificuldade em lidar com ambientes caóticos ou competitivos, frustração com colegas impulsivos ou agressivos, evitação de riscos mesmo quando necessários, dificuldade em se promover ou destacar conquistas, sobrecarga emocional por absorver tensões alheias.",
+        development: "Pratique assertividade: expresse suas ideias com clareza e respeito. Defina limites saudáveis: aprender a dizer 'não' é um ato de autocuidado. Aceite mudanças como oportunidades: comece com pequenos ajustes. Expresse suas necessidades: sua voz é tão importante quanto a dos outros. Busque feedback sobre seu impacto: você pode estar mais influente do que imagina.",
+        color: "#3b82f6"
+      },
+      C: {
+        name: "Conformidade (Melancólico)",
+        desc: "Pessoas com perfil Conformista são analíticas, precisas e orientadas por dados e processos. Valorizam a qualidade, a lógica e a consistência acima de tudo. São meticulosas, organizadas e focadas em fazer as coisas 'da maneira certa'. No trabalho, excelentes em funções que exigem atenção a detalhes, análise de riscos, controle de qualidade ou resolução de problemas complexos. Sua força é garantir que nada passe despercebido e que os padrões sejam mantidos.",
+        qualities: "Precisão e atenção a detalhes minuciosos, pensamento lógico e analítico, organização sistemática de informações, integridade para seguir regras e padrões, consistência no desempenho, capacidade de identificar erros ou inconsistências, foco em qualidade e excelência, paciência para revisar e refinar, objetividade baseada em fatos, disciplina para seguir processos.",
+        weaknesses: "Perfeccionismo excessivo que atrasa entregas, crítica excessiva (consigo e com os outros) por padrões elevados, hesitação em decidir sem todas as informações, rigidez em seguir processos mesmo quando ineficazes, dificuldade em lidar com imprevistos ou ambiguidades, tendência a isolar-se para focar no trabalho, resistência a feedbacks subjetivos ou emocionais, lentidão em adaptar-se a mudanças de última hora, foco excessivo em problemas em vez de soluções, dificuldade em delegar por medo de perda de controle de qualidade.",
+        development: "Aceite riscos calculados: nem toda decisão precisa de 100% de certeza. Pratique flexibilidade: pergunte 'qual é o custo de esperar mais?'. Celebre progressos, não só a perfeição. Confie mais na intuição e na experiência alheia. Comunique suas análises de forma construtiva, não crítica. Lembre-se: velocidade e adaptação são tão valiosas quanto precisão em muitos contextos.",
+        color: "#10b981"
+      }
+    };
+    // === 20 PROFISSÕES POR PERFIL ===
+    const professions = {
+      D: [
+        "Empreendedor / Fundador de Startups",
+        "CEO / Diretor Executivo",
+        "Advogado de Litígios",
+        "Corretor de Imóveis de Alto Padrão",
+        "Trader / Investidor",
+        "Policial / Agente de Segurança",
+        "Engenheiro de Projetos (com liderança)",
+        "Gerente de Vendas",
+        "Piloto de Competição / Esportes Radicais",
+        "Consultor de Transformação Organizacional",
+        "Militar de Alta Patente",
+        "Produtor de Eventos de Alto Impacto",
+        "Chef Executivo",
+        "Diretor de Operações",
+        "Engenheiro de Minas",
+        "Corretor de Seguros Corporativos",
+        "Gerente de Crise",
+        "Inspetor de Qualidade Industrial",
+        "Comandante de Navio",
+        "Líder de Equipe de Resgate"
+      ],
+      I: [
+        "Vendedor / Account Executive",
+        "Apresentador de TV / Rádio",
+        "Influenciador Digital",
+        "Professor (Educação Infantil ou Ensino Médio)",
+        "Recrutador de Talentos",
+        "Relações Públicas",
+        "Ator / Performer",
+        "Palestrante Motivacional",
+        "Host de Eventos",
+        "Gerente de Marketing de Influência",
+        "Músico",
+        "Instrumentista",
+        "Compositor",
+        "Cantor / Artista Performático",
+        "DJ / Produtor Musical",
+        "Designer de Moda",
+        "Criador de Conteúdo",
+        "Coach de Vida",
+        "Guia de Turismo",
+        "Animador Cultural"
+      ],
+      S: [
+        "Enfermeiro / Técnico em Enfermagem",
+        "Assistente Social",
+        "Coordenador de Equipe (RH ou Operações)",
+        "Professor de Educação Especial",
+        "Terapeuta Ocupacional",
+        "Bibliotecário",
+        "Mediador de Conflitos",
+        "Analista de Suporte ao Cliente",
+        "Cuidador de Idosos",
+        "Facilitador de Grupos Terapêuticos",
+        "Conselheiro Pastoral",
+        "Psicólogo Clínico",
+        "Instrutor de Yoga / Meditação",
+        "Coordenador de Voluntariado",
+        "Assistente Administrativo Sênior",
+        "Técnico em Laboratório Clínico",
+        "Conselheiro Escolar",
+        "Coordenador de Projetos Sociais",
+        "Auxiliar de Biblioteca",
+        "Cuidador de Crianças"
+      ],
+      C: [
+        "Cientista de Dados",
+        "Auditor Fiscal / Contador Forense",
+        "Engenheiro de Qualidade",
+        "Programador / Desenvolvedor de Software",
+        "Farmacêutico",
+        "Analista de Riscos Financeiros",
+        "Perito Criminal",
+        "Estatístico",
+        "Arquiteto de Sistemas",
+        "Pesquisador Acadêmico",
+        "Contador Forense",
+        "Engenheiro Aeroespacial",
+        "Bioestatístico",
+        "Especialista em Cibersegurança",
+        "Analista de Compliance",
+        "Engenheiro de Software",
+        "Analista de Dados Financeiros",
+        "Perito Contábil",
+        "Especialista em Automação Industrial",
+        "Analista de Sistemas ERP"
+      ]
+    };
+    // === EXPLICAÇÃO DA COMBINAÇÃO ===
+    function getCombinationExplanation(primary, secondary) {
+      const combos = {
+        DI: `Sua combinação Dominância-Influência (DI) cria um perfil dinâmico e orientado para ação. Você é naturalmente persuasivo, competitivo e adora desafios. Seu estilo é rápido, entusiasmado e focado em resultados. No ambiente profissional, você se destaca em vendas, liderança de equipes ou empreendedorismo, onde pode usar sua energia para motivar outros e conquistar metas ambiciosas. Seus maiores desafios incluem a impaciência com processos lentos e a tendência a negligenciar detalhes em prol da velocidade. Para crescer, pratique escuta ativa e desenvolva paciência com colegas mais analíticos ou cautelosos. Seu superpoder é transformar ideias em realidade com carisma e determinação. Você se sente mais realizado quando lidera mudanças visíveis e inspira outros a agir com coragem.`,
+        DS: `A combinação Dominância-Estabilidade (DS) equilibra ação e apoio. Você é um líder prático, confiável e orientado para soluções duradouras. Prefere ambientes estáveis onde pode implementar mudanças de forma controlada. Sua força está em construir equipes leais e resolver problemas com calma e eficiência. Evite frustrar-se com colegas impulsivos ou indecisos; em vez disso, use sua paciência para guiar o grupo. Seu desafio é equilibrar sua necessidade de controle com a flexibilidade necessária em ambientes dinâmicos. Você prospera em papéis como gerente de operações, engenheiro de projetos ou coordenador de equipes técnicas. Sua capacidade de manter a calma sob pressão faz de você um pilar em crises.`,
+        DC: `Dominância-Conformidade (DC) forma um perfil analítico e decisivo. Você toma decisões baseadas em dados, mas age com rapidez quando necessário. Sua precisão e foco em qualidade o tornam ideal para papéis técnicos de liderança, como engenheiro-chefe, auditor sênior ou consultor estratégico. Seu maior desafio é evitar o perfeccionismo que atrasa entregas. Aprenda a delegar tarefas analíticas e confie na intuição quando os dados forem insuficientes. Seu superpoder é resolver problemas complexos com lógica implacável e execução eficiente. Você valoriza padrões elevados e se sente realizado quando entrega soluções robustas e duradouras.`,
+        ID: `Influência-Dominância (ID) é a combinação do carisma com a ação. Você é um visionário entusiasmado que inspira outros a agir. Excelente em papéis de vendas, marketing ou liderança criativa, onde pode usar sua energia para conquistar e motivar. Cuidado com a impulsividade e a tendência a prometer mais do que pode entregar. Desenvolva disciplina e use sua influência para construir parcerias duradouras, não apenas conquistas rápidas. Seu superpoder é transformar visões em movimento coletivo. Sua capacidade de comunicar com paixão torna ideias abstratas em metas tangíveis.`,
+        IS: `Influência-Estabilidade (IS) cria um perfil acolhedor e colaborativo. Você é um facilitador natural, que constrói relacionamentos sólidos e ambientes positivos. Ideal para recursos humanos, ensino ou atendimento ao cliente, onde sua empatia e entusiasmo brilham. Seu desafio é evitar a passividade diante de conflitos; pratique assertividade para expressar suas ideias com clareza. Seu superpoder é criar harmonia em equipes diversas, transformando tensões em cooperação. Você se sente mais realizado quando ajuda outros a se sentirem valorizados e conectados.`,
+        IC: `Influência-Conformidade (IC) equilibra criatividade e precisão. Você comunica ideias com clareza e atenção aos detalhes. Excelente em papéis como designer instrucional, redator técnico ou gerente de produto, onde pode traduzir conceitos complexos em mensagens acessíveis. Cuidado com a autocrítica excessiva; celebre suas conquistas criativas. Seu superpoder é fazer com que dados e ideias ganhem vida de forma envolvente e precisa. Você se destaca quando consegue unir lógica e emoção em apresentações ou estratégias de comunicação.`,
+        SD: `Estabilidade-Dominância (SD) forma um líder de apoio prático. Você é leal, paciente e orientado para soluções concretas. Ideal para gestão de equipes operacionais, logística ou suporte técnico, onde sua confiabilidade é essencial. Seu desafio é assumir riscos calculados; saia da zona de conforto para liderar mudanças. Seu superpoder é manter a estabilidade enquanto impulsiona melhorias graduais e sustentáveis. Você se sente realizado quando consegue equilibrar eficiência com bem-estar coletivo.`,
+        SI: `Estabilidade-Influência (SI) é a combinação da harmonia com o entusiasmo. Você é um mediador carismático, que constrói pontes entre pessoas. Excelente em funções de suporte, voluntariado ou coordenação de eventos, onde sua empatia e energia criam conexões. Cuidado com a dificuldade em dizer "não"; defina limites saudáveis. Seu superpoder é transformar grupos em comunidades coesas e motivadas. Sua capacidade de ouvir e animar ao mesmo tempo é rara e valiosa.`,
+        SC: `Estabilidade-Conformidade (SC) cria um perfil meticuloso e confiável. Você é o alicerce de qualquer equipe, garantindo precisão e consistência. Ideal para contabilidade, análise de dados ou suporte administrativo, onde sua atenção aos detalhes é crucial. Seu desafio é adaptar-se a mudanças repentinas; pratique flexibilidade gradual. Seu superpoder é manter a qualidade e a confiança em processos críticos. Você se sente mais seguro em ambientes onde regras claras e ritmos previsíveis prevalecem.`,
+        CD: `Conformidade-Dominância (CD) forma um estrategista analítico. Você planeja com precisão e executa com determinação. Excelente em papéis como cientista de dados, engenheiro de sistemas ou consultor de riscos, onde sua lógica e foco em resultados são essenciais. Cuidado com a rigidez; aceite que nem toda decisão precisa de 100% de certeza. Seu superpoder é transformar dados em estratégias vencedoras. Sua capacidade de antecipar falhas e propor soluções robustas é incomparável.`,
+        CI: `Conformidade-Influência (CI) equilibra análise e comunicação. Você traduz dados complexos em insights acessíveis. Ideal para análise de mercado, ensino técnico ou consultoria, onde sua clareza e precisão educam e influenciam. Seu desafio é evitar a sobrecarga por perfeccionismo; priorize progresso sobre perfeição. Seu superpoder é fazer com que a lógica inspire ação. Você se sente realizado quando ajuda outros a entenderem o "porquê" por trás dos números.`,
+        CS: `Conformidade-Estabilidade (CS) cria um perfil detalhista e colaborativo. Você é o guardião da qualidade em ambientes estáveis. Excelente em laboratórios, controle de qualidade ou suporte técnico, onde sua paciência e precisão garantem excelência. Seu desafio é lidar com ambiguidades; defina processos claros para reduzir incertezas. Seu superpoder é manter padrões elevados com consistência e apoio à equipe. Sua lealdade e precisão fazem de você um parceiro de confiança em qualquer projeto de longo prazo.`
+      };
+      return combos[primary + secondary] || "Combinação única que equilibra forças complementares.";
+    }
+    // === FUNÇÃO GERAR PDF ===
+    async function generatePDF(data) {
+      try {
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF({ format: 'a4' });
+        doc.setFillColor(229, 231, 235);
+        doc.rect(0, 0, 210, 297, 'F');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(18);
+        doc.setTextColor(31, 41, 55);
+        doc.text('Pesquisa Impulso DISC', 105, 20, { align: 'center' });
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'normal');
+        const personalData = `Nome: ${sanitize(data.name)} | Idade: ${sanitize(data.age)} | Profissão: ${sanitize(data.occupation)} | Email: ${sanitize(data.email)} | Data: ${new Date().toLocaleDateString('pt-BR')} | Resultados: D=${data.pct.D}% I=${data.pct.I}% S=${data.pct.S}% C=${data.pct.C}%`;
+        const personalDataLines = doc.splitTextToSize(personalData, 170);
+        doc.text(personalDataLines, 20, 40);
+        doc.setFontSize(14);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Importância da Análise DISC', 20, 60);
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
+        const importanceText = doc.splitTextToSize(discImportance, 170);
+        doc.text(importanceText, 20, 70);
+        doc.setFontSize(14);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Resultados DISC', 20, 100);
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(239, 68, 68); // Vermelho para D
+        doc.text(`Dominância: ${data.pct.D}%`, 30, 110);
+        doc.setTextColor(245, 158, 11); // Laranja para I
+        doc.text(`Influência: ${data.pct.I}%`, 30, 120);
+        doc.setTextColor(59, 130, 246); // Azul para S
+        doc.text(`Estabilidade: ${data.pct.S}%`, 30, 130);
+        doc.setTextColor(16, 185, 129); // Verde para C
+        doc.text(`Conformidade: ${data.pct.C}%`, 30, 140);
+        doc.setTextColor(31, 41, 55); // Cor padrão
+        const chartCanvas = document.getElementById('resultChart');
+        if (chartCanvas) {
+          const chartImage = await html2canvas(chartCanvas, { scale: 2 });
+          const imgData = chartImage.toDataURL('image/png');
+          doc.addImage(imgData, 'PNG', 20, 150, 170, 85); // Gráfico de pizza no PDF
+        }
+        doc.setFontSize(14);
+        doc.setFont('helvetica', 'bold');
+        doc.text(`Perfil Primário: ${data.p.name} (${data.pct[data.primary]}%)`, 20, 240);
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
+        const primaryDesc = doc.splitTextToSize(`Descrição: ${data.p.desc}`, 170);
+        doc.text(primaryDesc, 20, 250);
+        const primaryQualities = doc.splitTextToSize(`Qualidades: ${data.p.qualities}`, 170);
+        doc.text(primaryQualities, 20, 270);
+        const primaryWeaknesses = doc.splitTextToSize(`Fraquezas: ${data.p.weaknesses}`, 170);
+        doc.text(primaryWeaknesses, 20, 290);
+        doc.addPage();
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'normal');
+        const primaryDevelopment = doc.splitTextToSize(`Para Desenvolver: ${data.p.development}`, 170);
+        doc.text(primaryDevelopment, 20, 20);
+        doc.setFontSize(14);
+        doc.setFont('helvetica', 'bold');
+        doc.text(`Perfil Secundário: ${data.s.name} (${data.pct[data.secondary]}%)`, 20, 40);
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
+        const secondaryDesc = doc.splitTextToSize(`Descrição: ${data.s.desc}`, 170);
+        doc.text(secondaryDesc, 20, 50);
+        const secondaryQualities = doc.splitTextToSize(`Qualidades: ${data.s.qualities}`, 170);
+        doc.text(secondaryQualities, 20, 70);
+        const secondaryWeaknesses = doc.splitTextToSize(`Fraquezas: ${data.s.weaknesses}`, 170);
+        doc.text(secondaryWeaknesses, 20, 90);
+        const secondaryDevelopment = doc.splitTextToSize(`Para Desenvolver: ${data.s.development}`, 170);
+        doc.text(secondaryDevelopment, 20, 110);
+        doc.setFontSize(14);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Combinação dos Perfis', 20, 130);
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
+        const comboText = doc.splitTextToSize(getCombinationExplanation(data.primary, data.secondary), 170);
+        doc.text(comboText, 20, 140);
+        const pdfName = `Pesquisa_Impulso_DISC_${sanitize(data.name).replace(/\s+/g, '_')}.pdf`;
+        doc.save(pdfName);
+        return doc.output('datauristring').split(',')[1];
+      } catch (error) {
+        console.error('Erro ao gerar PDF:', error);
+        alert('Erro ao gerar o PDF. Tente novamente.');
+        return null;
+      }
+    }
+    function showResult() {
+      if (responses.some(r => r === null)) {
+        alert('Responda todas as perguntas.');
+        return;
+      }
+      let D = 0, I = 0, S = 0, C = 0;
+      for (let i = 0; i < 48; i++) {
+        const resposta = responses[i];
+        if (i % 4 === 0) D += resposta;
+        else if (i % 4 === 1) I += resposta;
+        else if (i % 4 === 2) S += resposta;
+        else if (i % 4 === 3) C += resposta;
+      }
+      const normalize = (score) => {
+        const min = 12;
+        const max = 60;
+        return Math.max(0, Math.min(100, parseFloat((((score - min) / (max - min)) * 100).toFixed(1))));
+      };
+      const rawPct = {
+        D: normalize(D),
+        I: normalize(I),
+        S: normalize(S),
+        C: normalize(C)
+      };
+      const totalRaw = rawPct.D + rawPct.I + rawPct.S + rawPct.C;
+      const pct = {
+        D: parseFloat(((rawPct.D / totalRaw) * 100).toFixed(1)),
+        I: parseFloat(((rawPct.I / totalRaw) * 100).toFixed(1)),
+        S: parseFloat(((rawPct.S / totalRaw) * 100).toFixed(1)),
+        C: parseFloat(((rawPct.C / totalRaw) * 100).toFixed(1))
+      };
+      const total = pct.D + pct.I + pct.S + pct.C;
+      if (total !== 100) {
+        const diff = 100 - total;
+        const maxKey = Object.keys(pct).reduce((a, b) => pct[a] > pct[b] ? a : b);
+        pct[maxKey] = parseFloat((pct[maxKey] + diff).toFixed(1));
+      }
+      document.getElementById('test-section').classList.add('hidden');
+      document.getElementById('result').classList.remove('hidden');
+      setTimeout(() => {
+        const ctx = document.getElementById('resultChart').getContext('2d');
+        new Chart(ctx, {
+          type: 'pie',
+          data: {
+            labels: ['Dominância\n(Fogo/Colérico)', 'Influência\n(Ar/Sanguíneo)', 'Estabilidade\n(Água/Fleumático)', 'Conformidade\n(Terra/Melancólico)'],
+            datasets: [{
+              data: [pct.D, pct.I, pct.S, pct.C],
+              backgroundColor: [
+                '#ef4444', // D - Vermelho
+                '#f59e0b', // I - Laranja
+                '#3b82f6', // S - Azul
+                '#10b981'  // C - Verde
+              ],
+              borderColor: [
+                '#b91c1c', // D - Vermelho escuro
+                '#b45309', // I - Laranja escuro
+                '#1e40af', // S - Azul escuro
+                '#047857'  // C - Verde escuro
+              ],
+              borderWidth: 2,
+              hoverOffset: 20
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                position: 'bottom',
+                labels: {
+                  font: { size: 12, weight: 'bold' },
+                  color: '#1f2937',
+                  padding: 20
+                }
+              },
+              datalabels: {
+                formatter: (value) => `${value}%`,
+                color: '#fff',
+                font: { weight: 'bold', size: 12 },
+                textShadowColor: 'rgba(0,0,0,0.7)',
+                textShadowBlur: 2
+              }
+            },
+            layout: {
+              padding: 20
+            },
+            animation: {
+              duration: 1200,
+              easing: 'easeOutCubic'
+            },
+            elements: {
+              arc: {
+                borderWidth: 2,
+                borderColor: '#1f2937',
+                shadowColor: 'rgba(0,0,0,0.5)',
+                shadowBlur: 10,
+                shadowOffsetX: 5,
+                shadowOffsetY: 5
+              }
+            },
+            rotation: -30 // Inclinação para efeito 3D
+          },
+          plugins: [ChartDataLabels]
+        });
+      }, 300);
+      const sorted = Object.entries(pct).sort((a, b) => b[1] - a[1]);
+      const primary = sorted[0][0];
+      const secondary = sorted[1][0];
+      const p = fullProfiles[primary];
+      const s = fullProfiles[secondary];
+      document.getElementById('personal-data').innerHTML = `
+        <span class="font-bold">Nome:</span> ${sanitize(document.getElementById('name').value.trim())} | 
+        <span class="font-bold">Idade:</span> ${sanitize(document.getElementById('age').value.trim())} | 
+        <span class="font-bold">Profissão:</span> ${sanitize(document.getElementById('occupation').value.trim())} | 
+        <span class="font-bold">Email:</span> ${sanitize(document.getElementById('email').value.trim())} | 
+        <span class="font-bold text-red-500">D:</span> <span class="font-extrabold text-red-500">${pct.D}%</span> | 
+        <span class="font-bold text-orange-500">I:</span> <span class="font-extrabold text-orange-500">${pct.I}%</span> | 
+        <span class="font-bold text-blue-500">S:</span> <span class="font-extrabold text-blue-500">${pct.S}%</span> | 
+        <span class="font-bold text-green-500">C:</span> <span class="font-extrabold text-green-500">${pct.C}%</span>
+      `;
+      document.getElementById('dominant-section').innerHTML = `
+        <div class="bg-gradient-to-r from-blue-100 to-teal-100 p-3 rounded-lg border-l-4 border-teal-500 mb-4">
+          <h3 class="text-lg font-bold text-gray-800">Importância da Análise DISC</h3>
+          <p class="mt-1 text-xs">${discImportance}</p>
+        </div>
+        <div class="bg-gradient-to-r from-red-50 to-red-100 p-3 rounded-lg border-l-4 border-red-500">
+          <h3 class="text-lg font-bold text-gray-800">Perfil Primário: ${p.name} (<span class="font-extrabold text-red-500">${pct[primary]}%</span>)</h3>
+          <p class="mt-1 text-xs"><strong>Descrição:</strong> ${p.desc}</p>
+          <p class="mt-1 text-xs"><strong>Qualidades:</strong> ${p.qualities}</p>
+          <p class="mt-1 text-xs"><strong>Fraquezas:</strong> ${p.weaknesses}</p>
+          <p class="mt-1 text-xs"><strong>Para Desenvolver:</strong> ${p.development}</p>
+          <p class="mt-2 font-semibold text-xs">Profissões Ideais (20):</p>
+          <ul class="list-disc list-inside text-xs mt-1">${professions[primary].map(job => `<li>${job}</li>`).join('')}</ul>
+        </div>
+        <div class="bg-gradient-to-r from-orange-50 to-orange-100 p-3 rounded-lg border-l-4 border-orange-500">
+          <h3 class="text-lg font-bold text-gray-800">Perfil Secundário: ${s.name} (<span class="font-extrabold text-orange-500">${pct[secondary]}%</span>)</h3>
+          <p class="mt-1 text-xs"><strong>Descrição:</strong> ${s.desc}</p>
+          <p class="mt-1 text-xs"><strong>Qualidades:</strong> ${s.qualities}</p>
+          <p class="mt-1 text-xs"><strong>Fraquezas:</strong> ${s.weaknesses}</p>
+          <p class="mt-1 text-xs"><strong>Para Desenvolver:</strong> ${s.development}</p>
+          <p class="mt-2 font-semibold text-xs">Profissões Ideais (20):</p>
+          <ul class="list-disc list-inside text-xs mt-1">${professions[secondary].map(job => `<li>${job}</li>`).join('')}</ul>
+        </div>
+      `;
+      window.userData = {
+        name: document.getElementById('name').value.trim(),
+        age: document.getElementById('age').value.trim(),
+        occupation: document.getElementById('occupation').value.trim(),
+        email: document.getElementById('email').value.trim(),
+        pct,
+        primary,
+        secondary,
+        p,
+        s,
+        professions,
+        discExplanation: discExplanationFull
+      };
+      setTimeout(() => {
+        const chart = document.getElementById('resultChart');
+        if (chart) {
+          generateAndSendAll();
+        }
+      }, 1500);
+    }
+    async function generateAndSendAll() {
+      const data = window.userData;
+      const pdfBase64 = await generatePDF(data);
+      if (pdfBase64) {
+        try {
+          const subject = encodeURIComponent(`Novo Participante: ${sanitize(data.name)}`);
+          const body = encodeURIComponent(
+            `Nome: ${sanitize(data.name)}\n` +
+            `Idade: ${sanitize(data.age)}\n` +
+            `Profissão: ${sanitize(data.occupation)}\n` +
+            `Email: ${sanitize(data.email)}\n` +
+            `Resultados DISC:\n` +
+            `- Dominância: ${data.pct.D}%\n` +
+            `- Influência: ${data.pct.I}%\n` +
+            `- Estabilidade: ${data.pct.S}%\n` +
+            `- Conformidade: ${data.pct.C}%\n` +
+            `O PDF com os resultados foi gerado e baixado automaticamente. ` +
+            `Por favor, anexe o arquivo "${sanitize(data.name).replace(/\s+/g, '_')}_Pesquisa_Impulso_DISC.pdf" ao e-mail e envie.`
+          );
+          window.location.href = `mailto:impulsoflow@gmail.com?subject=${subject}&body=${body}`;
+          alert(
+            'Pesquisa finalizada! O PDF foi baixado com sucesso. ' +
+            'A caixa de e-mail foi aberta. Por favor, anexe o arquivo PDF baixado ' +
+            `("${sanitize(data.name).replace(/\s+/g, '_')}_Pesquisa_Impulso_DISC.pdf") ` +
+            'e clique em "Enviar" no seu cliente de e-mail para confirmar.'
+          );
+        } catch (error) {
+          alert(
+            'Pesquisa finalizada e PDF baixado com sucesso! ' +
+            'Erro ao abrir a caixa de e-mail. ' +
+            `Por favor, envie o arquivo PDF "${sanitize(data.name).replace(/\s+/g, '_')}_Pesquisa_Impulso_DISC.pdf" ` +
+            'manualmente para impulsoflow@gmail.com usando seu cliente de e-mail ou webmail.'
+          );
+        }
+      }
+    }
+  </script>
+</body>
+</html>
