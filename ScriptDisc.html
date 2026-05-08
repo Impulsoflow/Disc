@@ -51,6 +51,7 @@ function doPost(e) {
       case "loginAvaliado":     return handleLoginAvaliado(payload);
       case "getStatus360":      return handleGetStatus360(payload);
       case "getReport360":      return handleGetReport360(payload);
+      case "relatorio_360":     return handleRelatorio360(payload);
       case "relatorio_disc":    return handleRelatorioDisc(payload);
       case "validateInvite":    return handleValidateInvite(payload);
       case "consultar_360":     return handleConsultar360(payload);
@@ -119,6 +120,7 @@ function doGet(e) {
       case "loginAvaliado":     resultText = handleLoginAvaliado(payload).getContent(); break;
       case "getStatus360":      resultText = handleGetStatus360(payload).getContent(); break;
       case "getReport360":      resultText = handleGetReport360(payload).getContent(); break;
+      case "relatorio_360":     resultText = handleRelatorio360(payload).getContent(); break;
       case "relatorio_disc":    resultText = handleRelatorioDisc(payload).getContent(); break;
       case "validateInvite":    resultText = handleValidateInvite(payload).getContent(); break;
       case "submitConvidado":   resultText = handleSubmitConvidado(payload).getContent(); break;
@@ -901,6 +903,66 @@ function sendDiscEmail(payload, sessionId, pin) {
   }
 }
 
+function handleRelatorio360(payload) {
+  try {
+    if (!payload || !payload.email || !payload.pdfBase64) {
+      return jsonResponse({ ok: false, error: "PDF ou e-mail ausentes" });
+    }
+
+    const attachment = Utilities.newBlob(
+      Utilities.base64Decode(payload.pdfBase64),
+      "application/pdf",
+      payload.pdfFileName || "Relatorio360.pdf"
+    );
+
+    const subject = `🪞 Seu Relatório 360° Espelho — ${payload.nome || "Avaliado"}`;
+    const htmlBody = `
+<div style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto;background:#f4f9ff;padding:24px;border-radius:14px;">
+  <div style="background:linear-gradient(135deg,#0b4aa2,#062b62);padding:24px;border-radius:12px;text-align:center;">
+    <h1 style="color:#fff;margin:0;font-size:22px;">Instituto Impulso IE™ de Liderança</h1>
+    <p style="color:#cfe6ff;margin:6px 0 0;font-size:13px;letter-spacing:.05em;">Relatório 360° Espelho</p>
+  </div>
+  <div style="background:#fff;padding:24px;border-radius:12px;margin-top:16px;">
+    <h2 style="color:#063b7a;margin:0 0 12px;">Seu relatório comparativo está pronto</h2>
+    <p style="color:#334155;line-height:1.6;">
+      Segue em anexo o seu <strong>Relatório 360° Espelho</strong>, com a comparação entre autopercepção e visão externa.
+    </p>
+    <p style="color:#334155;line-height:1.6;">
+      E-mail: <strong>${payload.email}</strong>
+    </p>
+  </div>
+  <p style="text-align:center;color:#64748b;font-size:11px;margin-top:16px;">
+    Rogério Braga • Especialista em Inteligência Emocional<br>${ADMIN_EMAIL}
+  </p>
+</div>`;
+
+    GmailApp.sendEmail(payload.email, subject, "", {
+      htmlBody,
+      attachments: [attachment],
+      name: "Instituto Impulso IE™",
+      replyTo: ADMIN_EMAIL
+    });
+
+    if (payload.notifyAdmin !== false) {
+      GmailApp.sendEmail(
+        ADMIN_EMAIL,
+        `[Impulso] Relatório 360° gerado: ${payload.nome || "Avaliado"}`,
+        `Relatório 360° gerado para ${payload.nome || "Avaliado"}\nEmail: ${payload.email}\nArquivo: ${payload.pdfFileName || ""}`,
+        {
+          attachments: [attachment],
+          name: "Instituto Impulso IE™"
+        }
+      );
+    }
+
+    logEvent("RELATORIO_360_OK", `${payload.email} | ${payload.pdfFileName || ""}`);
+    return jsonResponse({ ok: true, message: "Relatório 360° enviado com sucesso" });
+  } catch (err) {
+    logEvent("EMAIL_ERROR", "handleRelatorio360: " + err.message);
+    return jsonResponse({ ok: false, error: err.message });
+  }
+}
+
 function handleRelatorioDisc(payload) {
   try {
     if (!payload || !payload.email || !payload.pdfBase64) {
@@ -940,6 +1002,18 @@ function handleRelatorioDisc(payload) {
       name: "Instituto Impulso IE™",
       replyTo: ADMIN_EMAIL
     });
+
+    if (payload.notifyAdmin !== false) {
+      GmailApp.sendEmail(
+        ADMIN_EMAIL,
+        `[Impulso] Relatório Geral DISC gerado: ${payload.nome || "Avaliado"}`,
+        `Relatório geral DISC gerado para ${payload.nome || "Avaliado"}\nEmail: ${payload.email}\nArquivo: ${payload.pdfFileName || ""}`,
+        {
+          attachments: [attachment],
+          name: "Instituto Impulso IE™"
+        }
+      );
+    }
 
     logEvent("RELATORIO_DISC_OK", `${payload.email} | ${payload.pdfFileName || ""}`);
     return jsonResponse({ ok: true, message: "Relatório geral enviado com sucesso" });
