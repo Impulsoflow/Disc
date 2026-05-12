@@ -436,10 +436,18 @@ function handleSubmitConvidado(payload) {
 // ═══════════════════════════════════════════════════════════════════════
 function handleLoginAvaliado(payload) {
   try {
-    const session = findSessionByEmailAndPin(payload.email, payload.pin);
+    const email = String(payload.email || "").trim().toLowerCase();
+    const pin = String(payload.pin || "").trim();
+    const session = findSessionByEmailAndPin(email, pin);
     if (!session) {
-      logEvent("LOGIN_FAIL", `Email=${payload.email}`);
-      return jsonResponse({ ok: false, error: "E-mail ou PIN inválidos" });
+      const sessionByEmail = findSessionByEmail(email);
+      logEvent("LOGIN_FAIL", `Email=${email}`);
+      return jsonResponse({
+        ok: false,
+        error: sessionByEmail
+          ? "Esse e-mail já tem uma sessão registrada. Use o PIN correto ou solicite redefinição/reinício."
+          : "E-mail ou PIN inválidos"
+      });
     }
 
     return jsonResponse({
@@ -544,6 +552,38 @@ function rowToSession(row, rowIndex) {
     resetToken: row[16] || "", resetTokenExpira: row[17] || "",
     rowIndex: rowIndex
   };
+}
+
+// 🆕 Busca campos extras (idade, profissão, escolaridade, whatsapp) na aba de respostas DISC
+// Colunas ABA_DISC: [0]Timestamp [1]Nome [2]Email [3]WhatsApp [4]Idade [5]Profissão [6]Escolaridade
+function findDiscExtraFields(email) {
+  const empty = { whatsapp: "", idade: "", profissao: "", escolaridade: "" };
+  try {
+    const sheet = getSpreadsheet().getSheetByName(ABA_DISC);
+    if (!sheet) return empty;
+    const data = sheet.getDataRange().getValues();
+    const emailNorm = String(email || "").trim().toLowerCase();
+    if (!emailNorm) return empty;
+    let found = null;
+    for (let i = 1; i < data.length; i++) {
+      const rowEmail = String(data[i][2] || "").trim().toLowerCase();
+      if (rowEmail === emailNorm) {
+        // Pega a linha mais recente (maior timestamp)
+        if (!found || new Date(data[i][0]) > new Date(found[0])) {
+          found = data[i];
+        }
+      }
+    }
+    if (!found) return empty;
+    return {
+      whatsapp:     String(found[3] || "").trim(),
+      idade:        String(found[4] || "").trim(),
+      profissao:    String(found[5] || "").trim(),
+      escolaridade: String(found[6] || "").trim()
+    };
+  } catch (e) {
+    return empty;
+  }
 }
 
 function findSession(sessionId) {
@@ -1250,12 +1290,20 @@ function handleConsultar360(payload) {
 
     logEvent("LOGIN_OK", `consultar_360 | ${session.nome} | ${session.sessionId} | primeiraSenha=${primeiraSenha}`);
 
+    // Busca campos extras (idade, profissão, escolaridade) na aba de respostas DISC
+    const extra = findDiscExtraFields(session.email);
+
     return jsonResponse({
       ok: true,
       sessionId: session.sessionId,
       nomeAvaliado: session.nome,
+      emailAvaliado: session.email || "",
+      whatsappAvaliado: session.whatsapp || extra.whatsapp || "",
+      idadeAvaliado: extra.idade || "",
+      profissaoAvaliado: extra.profissao || "",
+      escolaridadeAvaliado: extra.escolaridade || "",
       codigo360: session.codigo360 || "",
-      totalAvaliadores: totalRespondidos,  // O total de avaliadores = total que respondeu (já que não temos lista de convidados pendentes)
+      totalAvaliadores: totalRespondidos,
       totalRespondidos: totalRespondidos,
       completa: totalRespondidos >= MIN_AVALIACOES_360,
       avaliadores: lista,
@@ -1267,8 +1315,8 @@ function handleConsultar360(payload) {
         S: Number(session.scoreS) || 0,
         C: Number(session.scoreC) || 0
       },
-      primeiraSenha: primeiraSenha,  // 🆕 Indica se precisa criar a primeira senha
-      tokenPrimeiraSenha: tokenPrimeiraSenha  // 🆕 Token para criar a primeira senha
+      primeiraSenha: primeiraSenha,
+      tokenPrimeiraSenha: tokenPrimeiraSenha
     });
   } catch (err) {
     logEvent("ERROR", "consultar_360: " + err.message);
