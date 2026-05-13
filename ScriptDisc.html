@@ -260,8 +260,8 @@ function create360Session(data) {
       "Timestamp", "SessionId", "PIN", "Nome", "Email", "WhatsApp",
       "Score D Auto", "Score I Auto", "Score S Auto", "Score C Auto",
       "Perfil Primário", "Data Limite", "Status", "Total Convidados",
-      // 🆕 Novas colunas: código 360°, senha do avaliado, token de reset
-      "Codigo360", "SenhaHash", "ResetToken", "ResetTokenExpira"
+      // 🆕 Novas colunas: código 360°, senha do avaliado, token de reset, link do relatório
+      "Codigo360", "SenhaHash", "ResetToken", "ResetTokenExpira", "link relatorio"
     ]);
   }
 
@@ -283,7 +283,7 @@ function create360Session(data) {
     data.scoreD, data.scoreI, data.scoreS, data.scoreC,
     data.perfilPrimario,
     dataLimite, "ativo", 0,
-    codigo360, senhaHash, "", ""
+    codigo360, senhaHash, "", "", ""
   ]);
 
   logEvent("SESSION_360_CREATED",
@@ -292,17 +292,17 @@ function create360Session(data) {
   return { codigo360: codigo360 };
 }
 
-// 🆕 Garante que a aba Avaliados360 tem as 4 colunas extras (Codigo360, SenhaHash, ResetToken, ResetTokenExpira)
+// 🆕 Garante que a aba Avaliados360 tem as colunas extras (inclui link relatorio)
 function ensureAvaliadosExtraColumns(sheet) {
   try {
     const lastCol = sheet.getLastColumn();
-    if (lastCol >= 18) return; // já tem todas
+    if (lastCol >= 19) return; // já tem todas
     const headersRow = sheet.getRange(1, 1, 1, Math.max(lastCol, 1)).getValues()[0];
     const desired = [
       "Timestamp", "SessionId", "PIN", "Nome", "Email", "WhatsApp",
       "Score D Auto", "Score I Auto", "Score S Auto", "Score C Auto",
       "Perfil Primário", "Data Limite", "Status", "Total Convidados",
-      "Codigo360", "SenhaHash", "ResetToken", "ResetTokenExpira"
+      "Codigo360", "SenhaHash", "ResetToken", "ResetTokenExpira", "link relatorio"
     ];
     for (let i = lastCol; i < desired.length; i++) {
       sheet.getRange(1, i + 1).setValue(desired[i]);
@@ -550,8 +550,57 @@ function rowToSession(row, rowIndex) {
     // 🆕 Novas colunas (índices 14..17) — podem ser undefined em planilhas antigas
     codigo360: row[14] || "", senhaHash: row[15] || "",
     resetToken: row[16] || "", resetTokenExpira: row[17] || "",
+    linkRelatorio: row[18] || "",
     rowIndex: rowIndex
   };
+}
+
+function getOrCreateRelatoriosFolder() {
+  const name = "Relatorios_DISC_Impulso";
+  const iter = DriveApp.getFoldersByName(name);
+  if (iter.hasNext()) return iter.next();
+  return DriveApp.createFolder(name);
+}
+
+function storePdfAndGetLink(base64, fileName) {
+  const folder = getOrCreateRelatoriosFolder();
+  const blob = Utilities.newBlob(
+    Utilities.base64Decode(base64),
+    "application/pdf",
+    fileName || ("Relatorio_" + new Date().getTime() + ".pdf")
+  );
+  const file = folder.createFile(blob);
+  try {
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  } catch (e) {
+    // se a política da conta bloquear compartilhamento público, ainda retornamos URL interna
+  }
+  return file.getUrl();
+}
+
+function updateRelatorioLink(sessionId, email, linkUrl) {
+  if (!linkUrl) return false;
+  const sheet = getSpreadsheet().getSheetByName(ABA_AVALIADOS);
+  if (!sheet) return false;
+  ensureAvaliadosExtraColumns(sheet);
+  const data = sheet.getDataRange().getValues();
+  const idNorm = String(sessionId || "").trim();
+  const emailNorm = String(email || "").trim().toLowerCase();
+
+  let targetRow = -1;
+  if (idNorm) {
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][1] || "").trim() === idNorm) { targetRow = i + 1; break; }
+    }
+  }
+  if (targetRow < 0 && emailNorm) {
+    for (let i = data.length - 1; i >= 1; i--) {
+      if (String(data[i][4] || "").trim().toLowerCase() === emailNorm) { targetRow = i + 1; break; }
+    }
+  }
+  if (targetRow < 0) return false;
+  sheet.getRange(targetRow, 19).setValue(linkUrl);
+  return true;
 }
 
 // 🆕 Busca campos extras (idade, profissão, escolaridade, whatsapp) na aba de respostas DISC
@@ -874,6 +923,9 @@ function sendDiscEmail(payload, sessionId, pin) {
   try {
     const linkConvidado = `${URL_PAGINA_CONVIDADO}?id=${sessionId}`;
     const subject = `🎯 Seu Relatório DISC + Acesso 360° Espelho — ${payload.nome}`;
+    const reportFileName = payload.pdfFileName || "ImpulsoDisc.pdf";
+    const reportLink = storePdfAndGetLink(payload.pdfBase64, reportFileName);
+    updateRelatorioLink(sessionId, payload.email, reportLink);
 
     const htmlBody = `
 <div style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto;background:#f4f9ff;padding:24px;border-radius:14px;">
@@ -884,6 +936,10 @@ function sendDiscEmail(payload, sessionId, pin) {
   <div style="background:#fff;padding:24px;border-radius:12px;margin-top:16px;">
     <h2 style="color:#063b7a;margin:0 0 12px;">Olá, ${payload.nome}! 🎉</h2>
     <p style="color:#334155;line-height:1.6;">Seu <strong>Relatório DISC Premium</strong> está em anexo. Mas isso é só o começo!</p>
+    <p style="color:#334155;line-height:1.6;">
+      🔗 Link do seu relatório para download:
+      <a href="${reportLink}" style="color:#0b63ce;font-weight:bold;">Abrir relatório PDF</a>
+    </p>
     <div style="background:linear-gradient(135deg,#fef3c7,#fde68a);border-left:5px solid #d97706;padding:18px;border-radius:10px;margin:20px 0;">
       <h3 style="color:#92400e;margin:0 0 10px;font-size:16px;">✨ NOVO: Acesso ao Impulso DISC 360°</h3>
       <p style="color:#451a03;margin:0;line-height:1.6;font-size:14px;">
@@ -926,7 +982,7 @@ function sendDiscEmail(payload, sessionId, pin) {
     const attachment = Utilities.newBlob(
       Utilities.base64Decode(payload.pdfBase64),
       "application/pdf",
-      payload.pdfFileName || "ImpulsoDisc.pdf"
+      reportFileName
     );
 
     GmailApp.sendEmail(payload.email, subject, "", {
@@ -936,7 +992,7 @@ function sendDiscEmail(payload, sessionId, pin) {
     });
 
     GmailApp.sendEmail(ADMIN_EMAIL, `[Impulso] Novo DISC: ${payload.nome}`,
-      `Nome: ${payload.nome}\nEmail: ${payload.email}\nPerfil: ${payload.perfilPrimario}\nSession: ${sessionId}\nPIN: ${pin}`);
+      `Nome: ${payload.nome}\nEmail: ${payload.email}\nPerfil: ${payload.perfilPrimario}\nSession: ${sessionId}\nPIN: ${pin}\nLink relatório: ${reportLink}`);
 
   } catch (err) {
     logEvent("EMAIL_ERROR", err.message);
@@ -949,10 +1005,14 @@ function handleRelatorio360(payload) {
       return jsonResponse({ ok: false, error: "PDF ou e-mail ausentes" });
     }
 
+    const reportFileName = payload.pdfFileName || "Relatorio360.pdf";
+    const reportLink = storePdfAndGetLink(payload.pdfBase64, reportFileName);
+    updateRelatorioLink(payload.sessionId, payload.email, reportLink);
+
     const attachment = Utilities.newBlob(
       Utilities.base64Decode(payload.pdfBase64),
       "application/pdf",
-      payload.pdfFileName || "Relatorio360.pdf"
+      reportFileName
     );
 
     const subject = `🪞 Seu Relatório 360° Espelho — ${payload.nome || "Avaliado"}`;
@@ -968,6 +1028,9 @@ function handleRelatorio360(payload) {
       Segue em anexo o seu <strong>Relatório 360° Espelho</strong>, com a comparação entre autopercepção e visão externa.
     </p>
     <p style="color:#334155;line-height:1.6;">
+      🔗 Link para download: <a href="${reportLink}" style="color:#0b63ce;font-weight:bold;">Abrir relatório PDF</a>
+    </p>
+    <p style="color:#334155;line-height:1.6;">
       E-mail: <strong>${payload.email}</strong>
     </p>
   </div>
@@ -983,20 +1046,18 @@ function handleRelatorio360(payload) {
       replyTo: ADMIN_EMAIL
     });
 
-    if (payload.notifyAdmin !== false) {
-      GmailApp.sendEmail(
-        ADMIN_EMAIL,
-        `[Impulso] Relatório 360° gerado: ${payload.nome || "Avaliado"}`,
-        `Relatório 360° gerado para ${payload.nome || "Avaliado"}\nEmail: ${payload.email}\nArquivo: ${payload.pdfFileName || ""}`,
-        {
-          attachments: [attachment],
-          name: "Instituto Impulso IE™"
-        }
-      );
-    }
+    GmailApp.sendEmail(
+      ADMIN_EMAIL,
+      `[Impulso] Relatório 360° gerado: ${payload.nome || "Avaliado"}`,
+      `Relatório 360° gerado para ${payload.nome || "Avaliado"}\nEmail: ${payload.email}\nArquivo: ${reportFileName}\nLink relatório: ${reportLink}`,
+      {
+        attachments: [attachment],
+        name: "Instituto Impulso IE™"
+      }
+    );
 
-    logEvent("RELATORIO_360_OK", `${payload.email} | ${payload.pdfFileName || ""}`);
-    return jsonResponse({ ok: true, message: "Relatório 360° enviado com sucesso" });
+    logEvent("RELATORIO_360_OK", `${payload.email} | ${reportFileName} | ${reportLink}`);
+    return jsonResponse({ ok: true, message: "Relatório 360° enviado com sucesso", linkRelatorio: reportLink });
   } catch (err) {
     logEvent("EMAIL_ERROR", "handleRelatorio360: " + err.message);
     return jsonResponse({ ok: false, error: err.message });
@@ -1009,10 +1070,14 @@ function handleRelatorioDisc(payload) {
       return jsonResponse({ ok: false, error: "PDF ou e-mail ausentes" });
     }
 
+    const reportFileName = payload.pdfFileName || "RelatorioGeral_DISC.pdf";
+    const reportLink = storePdfAndGetLink(payload.pdfBase64, reportFileName);
+    updateRelatorioLink(payload.sessionId, payload.email, reportLink);
+
     const attachment = Utilities.newBlob(
       Utilities.base64Decode(payload.pdfBase64),
       "application/pdf",
-      payload.pdfFileName || "RelatorioGeral_DISC.pdf"
+      reportFileName
     );
 
     const subject = `📄 Seu Relatório Geral DISC — ${payload.nome || "Avaliado"}`;
@@ -1028,6 +1093,9 @@ function handleRelatorioDisc(payload) {
       Segue em anexo o seu <strong>Relatório Geral DISC</strong>, com a leitura comportamental completa.
     </p>
     <p style="color:#334155;line-height:1.6;">
+      🔗 Link para download: <a href="${reportLink}" style="color:#0b63ce;font-weight:bold;">Abrir relatório PDF</a>
+    </p>
+    <p style="color:#334155;line-height:1.6;">
       E-mail: <strong>${payload.email}</strong>
     </p>
   </div>
@@ -1043,20 +1111,18 @@ function handleRelatorioDisc(payload) {
       replyTo: ADMIN_EMAIL
     });
 
-    if (payload.notifyAdmin !== false) {
-      GmailApp.sendEmail(
-        ADMIN_EMAIL,
-        `[Impulso] Relatório Geral DISC gerado: ${payload.nome || "Avaliado"}`,
-        `Relatório geral DISC gerado para ${payload.nome || "Avaliado"}\nEmail: ${payload.email}\nArquivo: ${payload.pdfFileName || ""}`,
-        {
-          attachments: [attachment],
-          name: "Instituto Impulso IE™"
-        }
-      );
-    }
+    GmailApp.sendEmail(
+      ADMIN_EMAIL,
+      `[Impulso] Relatório Geral DISC gerado: ${payload.nome || "Avaliado"}`,
+      `Relatório geral DISC gerado para ${payload.nome || "Avaliado"}\nEmail: ${payload.email}\nArquivo: ${reportFileName}\nLink relatório: ${reportLink}`,
+      {
+        attachments: [attachment],
+        name: "Instituto Impulso IE™"
+      }
+    );
 
-    logEvent("RELATORIO_DISC_OK", `${payload.email} | ${payload.pdfFileName || ""}`);
-    return jsonResponse({ ok: true, message: "Relatório geral enviado com sucesso" });
+    logEvent("RELATORIO_DISC_OK", `${payload.email} | ${reportFileName} | ${reportLink}`);
+    return jsonResponse({ ok: true, message: "Relatório geral enviado com sucesso", linkRelatorio: reportLink });
   } catch (err) {
     logEvent("EMAIL_ERROR", "handleRelatorioDisc: " + err.message);
     return jsonResponse({ ok: false, error: err.message });
