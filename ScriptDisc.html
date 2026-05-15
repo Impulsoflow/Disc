@@ -310,6 +310,25 @@ function ensureAvaliadosExtraColumns(sheet) {
   } catch (e) { /* silencioso */ }
 }
 
+// Garante que a aba Convidados360 tenha os campos de qualidade sem quebrar bases antigas.
+function ensureConvidadosExtraColumns(sheet) {
+  try {
+    const lastCol = sheet.getLastColumn();
+    const desired = [
+      "Timestamp", "SessionId", "Relação", "Tempo Convivência",
+      "Score D", "Score I", "Score S", "Score C",
+      "% D", "% I", "% S", "% C",
+      "P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10", "P11", "P12",
+      "Força Principal", "Ponto Melhoria", "Sugestão SBI",
+      "Momento Marcante", "Frequência", "Tempo Total (s)", "Indice Confiabilidade",
+      "Classificacao Confiabilidade", "Flags Qualidade", "Resumo Qualidade"
+    ];
+    for (let i = lastCol; i < desired.length; i++) {
+      sheet.getRange(1, i + 1).setValue(desired[i]);
+    }
+  } catch (e) { /* silencioso */ }
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // 3️⃣ VALIDAR LINK DE CONVITE  🆕 CORRIGIDO — agora aceita PIN também
 // ═══════════════════════════════════════════════════════════════════════
@@ -389,9 +408,11 @@ function handleSubmitConvidado(payload) {
       headers.push("Força Principal", "Ponto Melhoria", "Sugestão SBI");
       sheet.appendRow(headers);
     }
+    ensureConvidadosExtraColumns(sheet);
 
     const scores = calcDiscFromResponses(payload.respostas);
     const pcts = calcPercentages(scores);
+    const quality = calcConvidadoQuality(payload, scores, pcts);
 
     const row = [
       new Date(), sessionIdReal,
@@ -405,7 +426,14 @@ function handleSubmitConvidado(payload) {
     row.push(
       payload.forcaPrincipal || "",
       payload.pontoMelhoria || "",
-      payload.sugestaoSBI || ""
+      payload.sugestaoSBI || "",
+      payload.momentoMarcante || "",
+      payload.frequencia || "",
+      quality.totalSeconds || 0,
+      quality.score,
+      quality.classification,
+      quality.flags.join(", "),
+      quality.summary
     );
 
     sheet.appendRow(row);
@@ -748,7 +776,14 @@ function getAllConvidados(sessionId) {
         scoreD: data[i][4], scoreI: data[i][5], scoreS: data[i][6], scoreC: data[i][7],
         pctD: data[i][8], pctI: data[i][9], pctS: data[i][10], pctC: data[i][11],
         premium,
-        forcaPrincipal: data[i][24], pontoMelhoria: data[i][25], sugestaoSBI: data[i][26]
+        forcaPrincipal: data[i][24], pontoMelhoria: data[i][25], sugestaoSBI: data[i][26],
+        momentoMarcante: data[i][27] || "",
+        frequencia: data[i][28] || "",
+        tempoTotalSeg: Number(data[i][29]) || 0,
+        indiceConfiabilidade: Number(data[i][30]) || 0,
+        classificacaoConfiabilidade: data[i][31] || "",
+        flagsQualidade: data[i][32] || "",
+        resumoQualidade: data[i][33] || ""
       });
     }
   }
@@ -802,6 +837,91 @@ function calcPercentages(scores) {
     S: Math.round((scores.S / total) * 100),
     C: Math.round((scores.C / total) * 100)
   };
+}
+
+function numericResponses(arr) {
+  return (arr || []).map(Number).filter(n => Number.isFinite(n) && n > 0);
+}
+
+function calcVariance(values) {
+  const nums = numericResponses(values);
+  if (!nums.length) return 0;
+  const mean = nums.reduce((acc, n) => acc + n, 0) / nums.length;
+  return nums.reduce((acc, n) => acc + Math.pow(n - mean, 2), 0) / nums.length;
+}
+
+function dominantRate(values) {
+  const nums = numericResponses(values);
+  if (!nums.length) return 0;
+  const counts = {};
+  nums.forEach(n => { counts[n] = (counts[n] || 0) + 1; });
+  return Math.max.apply(null, Object.keys(counts).map(k => counts[k])) / nums.length;
+}
+
+function classifyConfidence(score) {
+  if (score >= 85) return "Alta";
+  if (score >= 70) return "Boa";
+  if (score >= 55) return "Moderada";
+  return "Baixa";
+}
+
+function qualityFlagLabel(flag) {
+  const labels = {
+    tempo_muito_rapido: "tempo muito rápido",
+    tempo_rapido: "tempo rápido",
+    straight_lining_disc: "respostas DISC muito repetidas",
+    straight_lining_premium: "respostas premium muito repetidas",
+    baixa_variacao_disc: "baixa variação no DISC",
+    baixa_variacao_premium: "baixa variação nas dimensões premium",
+    perfil_muito_concentrado: "perfil DISC muito concentrado",
+    convivencia_curta: "convivência curta",
+    baixa_frequencia: "baixa frequência de contato",
+    feedback_aberto_curto: "feedback aberto curto"
+  };
+  return labels[flag] || flag;
+}
+
+function calcConvidadoQuality(payload, scores, pcts) {
+  const meta = payload.qualityMeta || {};
+  const discVals = numericResponses(payload.respostas);
+  const premiumVals = numericResponses(payload.premium);
+  const totalSeconds = Number(meta.totalSeconds) || 0;
+  let score = 100;
+  const flags = [];
+
+  if (totalSeconds > 0 && totalSeconds < 180) { flags.push("tempo_muito_rapido"); score -= 20; }
+  else if (totalSeconds > 0 && totalSeconds < 300) { flags.push("tempo_rapido"); score -= 10; }
+
+  if (dominantRate(discVals) >= 0.85) { flags.push("straight_lining_disc"); score -= 25; }
+  if (dominantRate(premiumVals) >= 0.85) { flags.push("straight_lining_premium"); score -= 18; }
+  if (calcVariance(discVals) < 0.45) { flags.push("baixa_variacao_disc"); score -= 12; }
+  if (calcVariance(premiumVals) < 0.35) { flags.push("baixa_variacao_premium"); score -= 10; }
+
+  const maxPct = Math.max(Number(pcts.D) || 0, Number(pcts.I) || 0, Number(pcts.S) || 0, Number(pcts.C) || 0);
+  if (maxPct >= 50) { flags.push("perfil_muito_concentrado"); score -= 6; }
+
+  if (String(payload.tempoConvivencia || "").toLowerCase().indexOf("menos de 1 ano") !== -1) {
+    flags.push("convivencia_curta"); score -= 5;
+  }
+  if (String(payload.frequencia || "").toLowerCase().indexOf("raramente") !== -1) {
+    flags.push("baixa_frequencia"); score -= 7;
+  }
+
+  const openTextLength = [
+    payload.forcaPrincipal,
+    payload.pontoMelhoria,
+    payload.sugestaoSBI,
+    payload.momentoMarcante
+  ].join(" ").trim().length;
+  if (openTextLength < 120) { flags.push("feedback_aberto_curto"); score -= 8; }
+
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  const classification = classifyConfidence(score);
+  const summary = flags.length
+    ? "Atenção: " + flags.map(qualityFlagLabel).join("; ") + "."
+    : "Resposta consistente em tempo, variação e profundidade do feedback.";
+
+  return { score, classification, flags, summary, totalSeconds };
 }
 
 function calcMediasDisc(respostas) {
@@ -1569,15 +1689,24 @@ function handleRedefinirSenha(payload) {
       return jsonResponse({ ok: false, error: "Token expirado. Solicite um novo." });
     }
 
-    const sessionId = data[row][1];
+    const sessionId = String(data[row][1] || "").trim();
     const senhaHash = hashSenha(novaSenha);
+    const rowNumber = row + 1;
 
-    // Atualiza colunas: 16 = SenhaHash, 17 = ResetToken (limpa), 18 = ResetTokenExpira (limpa)
-    updateAvaliadoColuna(sessionId, 16, senhaHash);
-    updateAvaliadoColuna(sessionId, 17, "");
-    updateAvaliadoColuna(sessionId, 18, "");
+    // Grava diretamente na mesma linha do token para evitar inconsistência por busca de SessionId.
+    sheet.getRange(rowNumber, 16).setValue(senhaHash); // SenhaHash
+    sheet.getRange(rowNumber, 17).setValue("");        // ResetToken
+    sheet.getRange(rowNumber, 18).setValue("");        // ResetTokenExpira
+    SpreadsheetApp.flush();
 
-    logEvent("RESET_SENHA_OK", `Session=${sessionId}`);
+    // Validação defensiva: só confirma sucesso se a hash realmente ficou gravada.
+    const hashConfirm = String(sheet.getRange(rowNumber, 16).getValue() || "").trim();
+    if (hashConfirm !== senhaHash) {
+      logEvent("RESET_SENHA_FAIL_WRITE", `Session=${sessionId} | Row=${rowNumber}`);
+      return jsonResponse({ ok: false, error: "Não foi possível salvar sua senha. Tente novamente." });
+    }
+
+    logEvent("RESET_SENHA_OK", `Session=${sessionId} | Row=${rowNumber}`);
     return jsonResponse({ ok: true, message: "Senha redefinida com sucesso" });
   } catch (err) {
     logEvent("ERROR", "redefinir_senha: " + err.message);
