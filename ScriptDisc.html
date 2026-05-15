@@ -8,7 +8,6 @@
 // ═══════════════════════════════════════════════════════════════════════
 // 🎯 CONFIGURAÇÕES
 // ═══════════════════════════════════════════════════════════════════════
-const API_KEY = "2026Impulso$";
 const SPREADSHEET_ID = "14Dl9ALPNJgFKo63CbbrceEJm2Fc0iePB_0ZY-FZf3FY";
 const ADMIN_EMAIL = "impulsoflow@gmail.com";
 
@@ -19,7 +18,7 @@ const VALIDADE_DIAS_360 = 90;
 const PIN_LENGTH = 6;
 
 const URL_PAINEL_AVALIADO = "https://impulsoflow.github.io/DISC/";
-const URL_PAGINA_CONVIDADO = "https://impulsoflow.github.io/DISC/ConvidadeDisc360.html";
+const URL_PAGINA_CONVIDADO = "https://impulsoflow.github.io/ConvidadoDISC/";
 
 const ABA_DISC = "Respostas";
 const ABA_AVALIADOS = "Avaliados360";
@@ -36,13 +35,11 @@ function doPost(e) {
     }
 
     const payload = JSON.parse(e.postData.contents);
-
-    if (payload.apiKey !== API_KEY) {
-      logEvent("AUTH_FAIL", "API Key inválida");
-      return jsonResponse({ ok: false, error: "Não autorizado" });
-    }
-
     const action = payload.action || "saveDisc";
+    if (!isPublicActionAllowed(action)) {
+      logEvent("ACTION_BLOCKED", "POST action não permitida: " + action);
+      return jsonResponse({ ok: false, error: "Ação não permitida" });
+    }
 
     switch (action) {
       case "saveDisc":          return handleSaveDisc(payload);
@@ -90,13 +87,6 @@ function doGet(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
 
-    // Com callback → JSONP com action routing
-    const apiKey = params.apiKey || "";
-    if (apiKey !== API_KEY) {
-      logEvent("AUTH_FAIL", "JSONP API Key inválida");
-      return jsonpResponse(callback, { ok: false, error: "Não autorizado" });
-    }
-
     const action = params.action || "";
     let payload = {};
 
@@ -111,6 +101,11 @@ function doGet(e) {
       } catch (err) {
         return jsonpResponse(callback, { ok: false, error: "Payload inválido: " + err.message });
       }
+    }
+
+    if (!isPublicActionAllowed(action)) {
+      logEvent("ACTION_BLOCKED", "JSONP action não permitida: " + action);
+      return jsonpResponse(callback, { ok: false, error: "Ação não permitida" });
     }
 
     let resultText;
@@ -152,6 +147,26 @@ function jsonResponse(obj) {
   return ContentService
     .createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+function isPublicActionAllowed(action) {
+  return [
+    "saveDisc",
+    "createSession360",
+    "submitConvidado",
+    "loginAvaliado",
+    "getStatus360",
+    "getReport360",
+    "relatorio_360",
+    "relatorio_disc",
+    "validateInvite",
+    "consultar_360",
+    "recuperar_pin_360",
+    "ativar_360",
+    "solicitar_reset_senha",
+    "redefinir_senha",
+    "loginAvaliadoSenha"
+  ].indexOf(String(action || "")) !== -1;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -454,7 +469,7 @@ function handleSubmitConvidado(payload) {
     }
     ensureConvidadosExtraColumns(sheet);
 
-    const scores = calcDiscFromResponses(payload.respostas);
+    const scores = calcDiscFromResponses(payload.respostas, payload.discScoringMap);
     const pcts = calcPercentages(scores);
     const quality = calcConvidadoQuality(payload, scores, pcts);
     const demandaScores = calcDemandFromPayload(payload);
@@ -890,16 +905,40 @@ function breakdownByRelation(sessionId) {
 // ═══════════════════════════════════════════════════════════════════════
 // 🧮 CÁLCULOS DISC
 // ═══════════════════════════════════════════════════════════════════════
-function calcDiscFromResponses(respostas) {
-  // Suporta 24 (convidado) e 48 (avaliado) respostas
+function calcDiscFromResponses(respostas, scoringMap) {
+  // Suporta respostas antigas por ordem D/I/S/C e respostas novas com itens reversos.
   const r = respostas || [];
   const scores = { D: 0, I: 0, S: 0, C: 0 };
   const dims = ["D", "I", "S", "C"];
   for (let i = 0; i < r.length; i++) {
-    const dim = dims[i % 4];
-    scores[dim] += Number(r[i]) || 0;
+    const item = scoringMap && scoringMap[i] ? scoringMap[i] : null;
+    const dim = item && dims.indexOf(item.dim) !== -1 ? item.dim : dims[i % 4];
+    const raw = Number(r[i]) || 0;
+    if (raw <= 0) continue;
+    const value = item && item.reverse ? (6 - raw) : raw;
+    scores[dim] += value;
   }
   return scores;
+}
+
+function calcReverseConsistencyFlag(respostas, scoringMap) {
+  if (!respostas || !scoringMap || !scoringMap.length) return false;
+  const buckets = {};
+  ["D","I","S","C"].forEach(d => buckets[d] = { pos: [], rev: [] });
+  scoringMap.forEach((item, idx) => {
+    if (!item || !buckets[item.dim]) return;
+    const raw = Number(respostas[idx]) || 0;
+    if (!raw) return;
+    if (item.reverse) buckets[item.dim].rev.push(6 - raw);
+    else buckets[item.dim].pos.push(raw);
+  });
+  return Object.keys(buckets).some(dim => {
+    const b = buckets[dim];
+    if (!b.pos.length || !b.rev.length) return false;
+    const avgPos = b.pos.reduce((a,n)=>a+n,0) / b.pos.length;
+    const avgRev = b.rev.reduce((a,n)=>a+n,0) / b.rev.length;
+    return Math.abs(avgPos - avgRev) >= 2.2;
+  });
 }
 
 function calcDemandFromPayload(payload) {
@@ -983,7 +1022,8 @@ function qualityFlagLabel(flag) {
     perfil_muito_concentrado: "perfil DISC muito concentrado",
     convivencia_curta: "convivência curta",
     baixa_frequencia: "baixa frequência de contato",
-    feedback_aberto_curto: "feedback aberto curto"
+    feedback_aberto_curto: "feedback aberto curto",
+    inconsistencia_reversos: "inconsistência entre itens diretos e reversos"
   };
   return labels[flag] || flag;
 }
@@ -1006,6 +1046,10 @@ function calcConvidadoQuality(payload, scores, pcts) {
   if (calcVariance(discVals) < 0.45) { flags.push("baixa_variacao_disc"); score -= 12; }
   if (calcVariance(premiumVals) < 0.35) { flags.push("baixa_variacao_premium"); score -= 10; }
   if (demandaVals.length && calcVariance(demandaVals) < 0.30) { flags.push("baixa_variacao_demanda"); score -= 6; }
+  if (calcReverseConsistencyFlag(payload.respostas, payload.discScoringMap)) {
+    flags.push("inconsistencia_reversos");
+    score -= 12;
+  }
 
   const maxPct = Math.max(Number(pcts.D) || 0, Number(pcts.I) || 0, Number(pcts.S) || 0, Number(pcts.C) || 0);
   if (maxPct >= 50) { flags.push("perfil_muito_concentrado"); score -= 6; }
