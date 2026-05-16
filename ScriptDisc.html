@@ -301,8 +301,8 @@ function create360Session(data) {
   const dataLimite = new Date();
   dataLimite.setDate(dataLimite.getDate() + VALIDADE_DIAS_360);
 
-  // 🔒 SenhaHash deixada vazia — a senha é criada pelo avaliado depois, durante login/recuperação
-  const senhaHash = "";
+  // O PIN escolhido pelo avaliado é a credencial oficial do painel.
+  const senhaHash = data.pin ? hashSenha(String(data.pin).trim()) : "";
   // 🆕 Código 360° único (DISC-XXXXX) — usado no link do convidado
   const codigo360 = data.codigo360 || generateCodigo360();
   const exigScores = {
@@ -1497,6 +1497,9 @@ function handleAtivar360(payload) {
     if (!nome || !email || !pin) {
       return jsonResponse({ ok: false, error: "Dados obrigatórios ausentes (nome/email/pin)" });
     }
+    if (!/^\d{6}$/.test(pin)) {
+      return jsonResponse({ ok: false, error: "PIN inválido. Use exatamente 6 dígitos numéricos." });
+    }
 
     const sessionId = generateSessionId();
     // 🆕 Gera o código 360° único (DISC-XXXXX); aceita o que o frontend enviou se válido
@@ -1629,16 +1632,13 @@ function handleConsultar360(payload) {
       return jsonResponse({ ok: false, message: "E-mail ou PIN inválidos" });
     }
 
-    // 🆕 Verificar se é o PRIMEIRO LOGIN (senhaHash vazia)
+    // Migração silenciosa: sessões antigas podem ter PIN salvo, mas SenhaHash vazia.
+    // Como o login oficial é email + PIN, validamos o PIN e gravamos a hash sem bloquear o usuário.
     let primeiraSenha = false;
     let tokenPrimeiraSenha = null;
     if (!session.senhaHash || String(session.senhaHash).trim() === "") {
-      primeiraSenha = true;
-      // Gera um token para a primeira senha (válido por 1 hora)
-      tokenPrimeiraSenha = generateResetToken();
-      const expiraEm = new Date(Date.now() + 60 * 60 * 1000);  // 1 hora
-      updateAvaliadoColuna(session.sessionId, 17, tokenPrimeiraSenha);  // Col 17 = ResetToken
-      updateAvaliadoColuna(session.sessionId, 18, expiraEm.toISOString());  // Col 18 = ResetTokenExpira
+      updateAvaliadoColuna(session.sessionId, 16, hashSenha(pin)); // Col 16 = SenhaHash
+      logEvent("LOGIN_PIN_HASH_MIGRADO", `Session=${session.sessionId} | Email=${email}`);
     }
 
     const convidados = getAllConvidados(session.sessionId);
@@ -1849,12 +1849,12 @@ function handleSolicitarResetSenha(payload) {
 function handleRedefinirSenha(payload) {
   try {
     const token = String(payload.token || "").trim();
-    const novaSenha = String(payload.novaSenha || "");
-    if (!token || !novaSenha) {
-      return jsonResponse({ ok: false, error: "Token e nova senha são obrigatórios" });
+    const novoPin = String(payload.novaSenha || payload.novoPin || "").trim();
+    if (!token || !novoPin) {
+      return jsonResponse({ ok: false, error: "Token e novo PIN são obrigatórios" });
     }
-    if (novaSenha.length < 6) {
-      return jsonResponse({ ok: false, error: "A senha deve ter pelo menos 6 caracteres" });
+    if (!/^\d{6}$/.test(novoPin)) {
+      return jsonResponse({ ok: false, error: "O novo PIN deve ter exatamente 6 dígitos numéricos" });
     }
 
     // Procura sessão com este token
@@ -1877,24 +1877,26 @@ function handleRedefinirSenha(payload) {
     }
 
     const sessionId = String(data[row][1] || "").trim();
-    const senhaHash = hashSenha(novaSenha);
+    const senhaHash = hashSenha(novoPin);
     const rowNumber = row + 1;
 
     // Grava diretamente na mesma linha do token para evitar inconsistência por busca de SessionId.
+    sheet.getRange(rowNumber, 3).setValue(novoPin);    // PIN
     sheet.getRange(rowNumber, 16).setValue(senhaHash); // SenhaHash
     sheet.getRange(rowNumber, 17).setValue("");        // ResetToken
     sheet.getRange(rowNumber, 18).setValue("");        // ResetTokenExpira
     SpreadsheetApp.flush();
 
     // Validação defensiva: só confirma sucesso se a hash realmente ficou gravada.
+    const pinConfirm = String(sheet.getRange(rowNumber, 3).getValue() || "").trim();
     const hashConfirm = String(sheet.getRange(rowNumber, 16).getValue() || "").trim();
-    if (hashConfirm !== senhaHash) {
+    if (pinConfirm !== novoPin || hashConfirm !== senhaHash) {
       logEvent("RESET_SENHA_FAIL_WRITE", `Session=${sessionId} | Row=${rowNumber}`);
-      return jsonResponse({ ok: false, error: "Não foi possível salvar sua senha. Tente novamente." });
+      return jsonResponse({ ok: false, error: "Não foi possível salvar seu novo PIN. Tente novamente." });
     }
 
-    logEvent("RESET_SENHA_OK", `Session=${sessionId} | Row=${rowNumber}`);
-    return jsonResponse({ ok: true, message: "Senha redefinida com sucesso" });
+    logEvent("RESET_PIN_OK", `Session=${sessionId} | Row=${rowNumber}`);
+    return jsonResponse({ ok: true, message: "PIN redefinido com sucesso" });
   } catch (err) {
     logEvent("ERROR", "redefinir_senha: " + err.message);
     return jsonResponse({ ok: false, error: err.message });
@@ -1941,28 +1943,28 @@ function handleLoginAvaliadoSenha(payload) {
 function sendResetSenhaEmail(email, nome, token) {
   const safeNome = nome || "olá";
   const linkReset = `${URL_PAINEL_AVALIADO}?reset=${encodeURIComponent(token)}`;
-  const subject = `🔐 Redefinir sua senha — Instituto Impulso IE™`;
+  const subject = `🔐 Redefinir seu PIN — Instituto Impulso IE™`;
 
   const htmlBody = `
 <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;background:#f4f9ff;padding:24px;border-radius:14px;">
   <div style="background:linear-gradient(135deg,#0b4aa2,#062b62);padding:22px;border-radius:12px;text-align:center;">
     <h1 style="color:#fff;margin:0;font-size:20px;">Instituto Impulso IE™ de Liderança</h1>
-    <p style="color:#cfe6ff;margin:6px 0 0;font-size:12px;letter-spacing:.05em;">Redefinição de senha</p>
+    <p style="color:#cfe6ff;margin:6px 0 0;font-size:12px;letter-spacing:.05em;">Redefinição de PIN</p>
   </div>
   <div style="background:#fff;padding:24px;border-radius:12px;margin-top:14px;">
     <h2 style="color:#063b7a;margin:0 0 12px;font-size:18px;">Olá, ${safeNome}!</h2>
     <p style="color:#334155;line-height:1.6;font-size:14px;margin:0 0 14px;">
-      Recebemos um pedido para redefinir a senha da sua conta no Instituto Impulso IE™. Clique no botão abaixo para criar uma nova senha. Esse link é válido por <strong>1 hora</strong>.
+      Recebemos um pedido para redefinir o PIN de acesso da sua conta no Instituto Impulso IE™. Clique no botão abaixo para criar um novo PIN de 6 dígitos. Esse link é válido por <strong>1 hora</strong>.
     </p>
     <div style="text-align:center;margin:22px 0;">
       <a href="${linkReset}" style="display:inline-block;background:linear-gradient(45deg,#0b63ce,#084aa0);color:#fff;padding:14px 26px;border-radius:10px;text-decoration:none;font-weight:bold;font-size:15px;">
-        🔑 Redefinir minha senha
+        🔑 Redefinir meu PIN
       </a>
     </div>
     <p style="font-size:11px;color:#64748b;word-break:break-all;background:#f8fafc;padding:10px;border-radius:8px;border:1px dashed #cbd5e1;">${linkReset}</p>
     <hr style="border:none;border-top:1px solid #e2e8f0;margin:18px 0;">
     <p style="font-size:12px;color:#64748b;line-height:1.55;margin:0;">
-      <strong>Não foi você quem pediu?</strong> Ignore este e-mail — sua senha continua a mesma. Em caso de dúvida, fale com <a href="mailto:${ADMIN_EMAIL}" style="color:#0b63ce;">${ADMIN_EMAIL}</a>.
+      <strong>Não foi você quem pediu?</strong> Ignore este e-mail — seu PIN continua o mesmo. Em caso de dúvida, fale com <a href="mailto:${ADMIN_EMAIL}" style="color:#0b63ce;">${ADMIN_EMAIL}</a>.
     </p>
   </div>
   <p style="text-align:center;color:#64748b;font-size:11px;margin-top:14px;">
