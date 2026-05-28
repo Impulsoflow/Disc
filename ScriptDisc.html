@@ -11,7 +11,6 @@
 const API_KEY = "2026Impulso$";
 const SPREADSHEET_ID = "14Dl9ALPNJgFKo63CbbrceEJm2Fc0iePB_0ZY-FZf3FY";
 const ADMIN_EMAIL = "impulsoflow@gmail.com";
-const ADMIN_EMAIL_ALT = "impulsoflw@gmail.com";
 
 const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwwl82lCSU8x1-QYIO3W-JcO0UsuOXCdZACvcHaSdVyFMR2udcCNdDFKDyT5kYB2wORgQ/exec";
 
@@ -172,7 +171,7 @@ function isPublicActionAllowed(action) {
 }
 
 function getAdminRecipients() {
-  const emails = [ADMIN_EMAIL, ADMIN_EMAIL_ALT]
+  const emails = [ADMIN_EMAIL]
     .map(email => String(email || "").trim())
     .filter(Boolean);
   return emails.filter((email, idx) => emails.indexOf(email) === idx).join(",");
@@ -370,19 +369,59 @@ function ensureAvaliadosExtraColumns(sheet) {
 
 function ensureDiscExtraColumns(sheet) {
   try {
-    const lastCol = sheet.getLastColumn();
     const desired = [
       "Timestamp", "Nome", "Email", "WhatsApp", "Idade",
       "Profissão", "Escolaridade", "Perfil Primário", "Perfil Secundário",
       "Score D", "Score I", "Score S", "Score C",
       "% D", "% I", "% S", "% C", "Combinação", "SessionId 360°",
       "Exig D Auto", "Exig I Auto", "Exig S Auto", "Exig C Auto",
-      "Link Relatório DISC", "Arquivo Relatório DISC", "Data Relatório DISC", "Status Email DISC"
+      "Baixar Relatório DISC", "Link Relatório DISC", "Arquivo Relatório DISC",
+      "Data Relatório DISC", "Status Email DISC"
     ];
-    for (let i = lastCol; i < desired.length; i++) {
-      sheet.getRange(1, i + 1).setValue(desired[i]);
-    }
+    ensureHeaderColumns(sheet, desired);
   } catch (e) { /* silencioso */ }
+}
+
+function normalizeHeaderName(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getHeaderMap(sheet) {
+  const lastCol = Math.max(sheet.getLastColumn(), 1);
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  const map = {};
+  headers.forEach((header, idx) => {
+    const key = normalizeHeaderName(header);
+    if (key && !map[key]) map[key] = idx + 1;
+  });
+  return map;
+}
+
+function ensureHeaderColumns(sheet, desiredHeaders) {
+  let map = getHeaderMap(sheet);
+  desiredHeaders.forEach(header => {
+    const key = normalizeHeaderName(header);
+    if (!map[key]) {
+      const col = sheet.getLastColumn() + 1;
+      sheet.getRange(1, col).setValue(header);
+      map[key] = col;
+    }
+  });
+  return map;
+}
+
+function findHeaderColumn(sheet, aliases) {
+  const map = getHeaderMap(sheet);
+  for (let i = 0; i < aliases.length; i++) {
+    const col = map[normalizeHeaderName(aliases[i])];
+    if (col) return col;
+  }
+  return 0;
 }
 
 // Garante que a aba Convidados360 tenha os campos de qualidade sem quebrar bases antigas.
@@ -735,22 +774,28 @@ function updateDiscReportLink(sessionId, email, linkUrl, fileName, status) {
   const sheet = getSpreadsheet().getSheetByName(ABA_DISC);
   if (!sheet) return false;
   ensureDiscExtraColumns(sheet);
+  ensureHeaderColumns(sheet, [
+    "Baixar Relatório DISC", "Link Relatório DISC", "Arquivo Relatório DISC",
+    "Data Relatório DISC", "Status Email DISC"
+  ]);
   const data = sheet.getDataRange().getValues();
   const idNorm = String(sessionId || "").trim();
   const emailNorm = String(email || "").trim().toLowerCase();
+  const sessionCol = findHeaderColumn(sheet, ["SessionId 360°", "SessionId 360", "SessionId", "Session ID 360°"]);
+  const emailCol = findHeaderColumn(sheet, ["Email", "E-mail"]);
 
   let targetRow = -1;
-  if (idNorm) {
+  if (idNorm && sessionCol) {
     for (let i = data.length - 1; i >= 1; i--) {
-      if (String(data[i][18] || "").trim() === idNorm) {
+      if (String(data[i][sessionCol - 1] || "").trim() === idNorm) {
         targetRow = i + 1;
         break;
       }
     }
   }
-  if (targetRow < 0 && emailNorm) {
+  if (targetRow < 0 && emailNorm && emailCol) {
     for (let i = data.length - 1; i >= 1; i--) {
-      if (String(data[i][2] || "").trim().toLowerCase() === emailNorm) {
+      if (String(data[i][emailCol - 1] || "").trim().toLowerCase() === emailNorm) {
         targetRow = i + 1;
         break;
       }
@@ -758,10 +803,27 @@ function updateDiscReportLink(sessionId, email, linkUrl, fileName, status) {
   }
   if (targetRow < 0) return false;
 
-  sheet.getRange(targetRow, 24).setValue(linkUrl);
-  sheet.getRange(targetRow, 25).setValue(fileName || "");
-  sheet.getRange(targetRow, 26).setValue(new Date());
-  sheet.getRange(targetRow, 27).setValue(status || "RELATÓRIO GERADO");
+  const baixarCol = findHeaderColumn(sheet, ["Baixar Relatório DISC"]);
+  const linkCol = findHeaderColumn(sheet, ["Link Relatório DISC"]);
+  const arquivoCol = findHeaderColumn(sheet, ["Arquivo Relatório DISC"]);
+  const dataCol = findHeaderColumn(sheet, ["Data Relatório DISC"]);
+  const statusCol = findHeaderColumn(sheet, ["Status Email DISC"]);
+
+  if (baixarCol) {
+    try {
+      const rich = SpreadsheetApp.newRichTextValue()
+        .setText("Baixar relatório")
+        .setLinkUrl(linkUrl)
+        .build();
+      sheet.getRange(targetRow, baixarCol).setRichTextValue(rich);
+    } catch (e) {
+      sheet.getRange(targetRow, baixarCol).setValue(linkUrl);
+    }
+  }
+  if (linkCol) sheet.getRange(targetRow, linkCol).setValue(linkUrl);
+  if (arquivoCol) sheet.getRange(targetRow, arquivoCol).setValue(fileName || "");
+  if (dataCol) sheet.getRange(targetRow, dataCol).setValue(new Date());
+  if (statusCol) sheet.getRange(targetRow, statusCol).setValue(status || "RELATÓRIO GERADO");
   return true;
 }
 
@@ -1300,18 +1362,33 @@ function sendDiscEmail(payload, sessionId, pin) {
   </p>
 </div>`;
 
-    GmailApp.sendEmail(payload.email, subject, "", {
-      htmlBody,
-      name: "Instituto Impulso IE™",
-      replyTo: ADMIN_EMAIL
-    });
+    const emailErrors = [];
+    try {
+      GmailApp.sendEmail(payload.email, subject, "", {
+        htmlBody,
+        name: "Instituto Impulso IE™",
+        replyTo: ADMIN_EMAIL
+      });
+    } catch (mailErr) {
+      emailErrors.push("AVALIADO: " + mailErr.message);
+    }
 
-    sendAdminEmail(`[Impulso] Novo DISC: ${payload.nome}`,
-      `Nome: ${payload.nome}\nEmail: ${payload.email}\nPerfil: ${payload.perfilPrimario}\nSession: ${sessionId}\nPIN: ${pin}\nLink relatório: ${reportLink}`);
+    try {
+      sendAdminEmail(`[Impulso] Novo DISC: ${payload.nome}`,
+        `Nome: ${payload.nome}\nEmail: ${payload.email}\nPerfil: ${payload.perfilPrimario}\nSession: ${sessionId}\nPIN: ${pin}\nLink relatório: ${reportLink}`);
+    } catch (adminErr) {
+      emailErrors.push("ADMIN: " + adminErr.message);
+    }
 
-    updateDiscReportLink(sessionId, payload.email, reportLink, reportFileName, "EMAIL ENVIADO");
+    const finalStatus = emailErrors.length
+      ? "LINK GERADO - ERRO EMAIL: " + emailErrors.join(" | ")
+      : "LINK GERADO E EMAIL ENVIADO";
+    updateDiscReportLink(sessionId, payload.email, reportLink, reportFileName, finalStatus);
     logEvent("DISC_EMAIL_OK", `${payload.email} | ${reportFileName} | ${reportLink}`);
-    return { ok: true, linkRelatorio: reportLink };
+    if (emailErrors.length) {
+      logEvent("EMAIL_ERROR", "sendDiscEmail parcial: " + emailErrors.join(" | "));
+    }
+    return { ok: emailErrors.length === 0, linkRelatorio: reportLink, error: emailErrors.join(" | ") };
   } catch (err) {
     if (reportLink) {
       updateDiscReportLink(sessionId, payload.email, reportLink, reportFileName, "ERRO EMAIL: " + err.message);
