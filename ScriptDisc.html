@@ -11,6 +11,7 @@
 const API_KEY = "2026Impulso$";
 const SPREADSHEET_ID = "14Dl9ALPNJgFKo63CbbrceEJm2Fc0iePB_0ZY-FZf3FY";
 const ADMIN_EMAIL = "impulsoflow@gmail.com";
+const ADMIN_EMAIL_ALT = "impulsoflw@gmail.com";
 
 const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwwl82lCSU8x1-QYIO3W-JcO0UsuOXCdZACvcHaSdVyFMR2udcCNdDFKDyT5kYB2wORgQ/exec";
 
@@ -36,13 +37,11 @@ function doPost(e) {
     }
 
     const payload = JSON.parse(e.postData.contents);
-
-    if (payload.apiKey !== API_KEY) {
-      logEvent("AUTH_FAIL", "API Key inválida");
-      return jsonResponse({ ok: false, error: "Não autorizado" });
-    }
-
     const action = payload.action || "saveDisc";
+    if (!isPublicActionAllowed(action)) {
+      logEvent("ACTION_BLOCKED", "POST action não permitida: " + action);
+      return jsonResponse({ ok: false, error: "Ação não permitida" });
+    }
 
     switch (action) {
       case "saveDisc":          return handleSaveDisc(payload);
@@ -83,18 +82,11 @@ function doGet(e) {
       return ContentService
         .createTextOutput(JSON.stringify({
           service: "Impulso DISC 360°",
-          version: "2.2",
+          version: "2.3-email-link-fix",
           status: "online",
           timestamp: new Date().toISOString()
         }))
         .setMimeType(ContentService.MimeType.JSON);
-    }
-
-    // Com callback → JSONP com action routing
-    const apiKey = params.apiKey || "";
-    if (apiKey !== API_KEY) {
-      logEvent("AUTH_FAIL", "JSONP API Key inválida");
-      return jsonpResponse(callback, { ok: false, error: "Não autorizado" });
     }
 
     const action = params.action || "";
@@ -111,6 +103,11 @@ function doGet(e) {
       } catch (err) {
         return jsonpResponse(callback, { ok: false, error: "Payload inválido: " + err.message });
       }
+    }
+
+    if (!isPublicActionAllowed(action)) {
+      logEvent("ACTION_BLOCKED", "JSONP action não permitida: " + action);
+      return jsonpResponse(callback, { ok: false, error: "Ação não permitida" });
     }
 
     let resultText;
@@ -152,6 +149,37 @@ function jsonResponse(obj) {
   return ContentService
     .createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+function isPublicActionAllowed(action) {
+  return [
+    "saveDisc",
+    "createSession360",
+    "submitConvidado",
+    "loginAvaliado",
+    "getStatus360",
+    "getReport360",
+    "relatorio_360",
+    "relatorio_disc",
+    "validateInvite",
+    "consultar_360",
+    "recuperar_pin_360",
+    "ativar_360",
+    "solicitar_reset_senha",
+    "redefinir_senha",
+    "loginAvaliadoSenha"
+  ].indexOf(String(action || "")) !== -1;
+}
+
+function getAdminRecipients() {
+  const emails = [ADMIN_EMAIL, ADMIN_EMAIL_ALT]
+    .map(email => String(email || "").trim())
+    .filter(Boolean);
+  return emails.filter((email, idx) => emails.indexOf(email) === idx).join(",");
+}
+
+function sendAdminEmail(subject, body, options) {
+  GmailApp.sendEmail(getAdminRecipients(), subject, body, options || {});
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -1278,7 +1306,7 @@ function sendDiscEmail(payload, sessionId, pin) {
       replyTo: ADMIN_EMAIL
     });
 
-    GmailApp.sendEmail(ADMIN_EMAIL, `[Impulso] Novo DISC: ${payload.nome}`,
+    sendAdminEmail(`[Impulso] Novo DISC: ${payload.nome}`,
       `Nome: ${payload.nome}\nEmail: ${payload.email}\nPerfil: ${payload.perfilPrimario}\nSession: ${sessionId}\nPIN: ${pin}\nLink relatório: ${reportLink}`);
 
     updateDiscReportLink(sessionId, payload.email, reportLink, reportFileName, "EMAIL ENVIADO");
@@ -1333,8 +1361,7 @@ function handleRelatorio360(payload) {
       replyTo: ADMIN_EMAIL
     });
 
-    GmailApp.sendEmail(
-      ADMIN_EMAIL,
+    sendAdminEmail(
       `[Impulso] Relatório 360° gerado: ${payload.nome || "Avaliado"}`,
       `Relatório 360° gerado para ${payload.nome || "Avaliado"}\nEmail: ${payload.email}\nArquivo: ${reportFileName}\nLink relatório: ${reportLink}`,
       {
@@ -1390,8 +1417,7 @@ function handleRelatorioDisc(payload) {
       replyTo: ADMIN_EMAIL
     });
 
-    GmailApp.sendEmail(
-      ADMIN_EMAIL,
+    sendAdminEmail(
       `[Impulso] Relatório Geral DISC gerado: ${payload.nome || "Avaliado"}`,
       `Relatório geral DISC gerado para ${payload.nome || "Avaliado"}\nEmail: ${payload.email}\nArquivo: ${reportFileName}\nLink relatório: ${reportLink}`,
       {
@@ -1512,7 +1538,7 @@ function handleAtivar360(payload) {
     }
 
     try {
-      GmailApp.sendEmail(ADMIN_EMAIL,
+      sendAdminEmail(
         `[Impulso] 360° ativado: ${nome}`,
         `Avaliado: ${nome}\nEmail: ${email}\nPIN: ${pin}\nCódigo: ${codigo360}\nSession: ${sessionId}\nModo: ${modo || "padrão"}`);
     } catch (e) { /* silencioso */ }
