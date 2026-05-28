@@ -252,6 +252,7 @@ function handleSaveDisc(payload) {
       sessionId, pin,
       emailOk: !emailResult || emailResult.ok,
       linkRelatorio: emailResult ? (emailResult.linkRelatorio || "") : "",
+      emailError: emailResult ? (emailResult.error || "") : "",
       message: "DISC salvo e sessão 360° criada"
     });
 
@@ -770,7 +771,6 @@ function updateRelatorioLink(sessionId, email, linkUrl) {
 }
 
 function updateDiscReportLink(sessionId, email, linkUrl, fileName, status) {
-  if (!linkUrl) return false;
   const sheet = getSpreadsheet().getSheetByName(ABA_DISC);
   if (!sheet) return false;
   ensureDiscExtraColumns(sheet);
@@ -809,7 +809,7 @@ function updateDiscReportLink(sessionId, email, linkUrl, fileName, status) {
   const dataCol = findHeaderColumn(sheet, ["Data Relatório DISC"]);
   const statusCol = findHeaderColumn(sheet, ["Status Email DISC"]);
 
-  if (baixarCol) {
+  if (baixarCol && linkUrl) {
     try {
       const rich = SpreadsheetApp.newRichTextValue()
         .setText("Baixar relatório")
@@ -820,7 +820,7 @@ function updateDiscReportLink(sessionId, email, linkUrl, fileName, status) {
       sheet.getRange(targetRow, baixarCol).setValue(linkUrl);
     }
   }
-  if (linkCol) sheet.getRange(targetRow, linkCol).setValue(linkUrl);
+  if (linkCol) sheet.getRange(targetRow, linkCol).setValue(linkUrl || "");
   if (arquivoCol) sheet.getRange(targetRow, arquivoCol).setValue(fileName || "");
   if (dataCol) sheet.getRange(targetRow, dataCol).setValue(new Date());
   if (statusCol) sheet.getRange(targetRow, statusCol).setValue(status || "RELATÓRIO GERADO");
@@ -1390,12 +1390,30 @@ function sendDiscEmail(payload, sessionId, pin) {
     }
     return { ok: emailErrors.length === 0, linkRelatorio: reportLink, error: emailErrors.join(" | ") };
   } catch (err) {
-    if (reportLink) {
-      updateDiscReportLink(sessionId, payload.email, reportLink, reportFileName, "ERRO EMAIL: " + err.message);
-    }
+    updateDiscReportLink(sessionId, payload.email, reportLink, reportFileName, "ERRO GERAR LINK/EMAIL: " + err.message);
     logEvent("EMAIL_ERROR", "sendDiscEmail: " + err.message);
     return { ok: false, error: err.message };
   }
+}
+
+function autorizarEmailDrive() {
+  const file = DriveApp.createFile(
+    Utilities.newBlob("Teste de autorização Impulso DISC", "text/plain", "teste_autorizacao_impulso_disc.txt")
+  );
+  const fileUrl = file.getUrl();
+  try {
+    file.setTrashed(true);
+  } catch (e) { /* mantém arquivo se a lixeira falhar */ }
+
+  GmailApp.sendEmail(
+    ADMIN_EMAIL,
+    "[Impulso] Teste de autorização Drive/Gmail OK",
+    "Se você recebeu este e-mail, o Apps Script tem permissão para enviar e-mails e criar arquivos no Drive.\n\nArquivo teste: " + fileUrl,
+    { name: "Instituto Impulso IE™" }
+  );
+
+  logEvent("AUTH_TEST_OK", "Drive/Gmail autorizados para " + ADMIN_EMAIL);
+  return "OK - autorização Drive/Gmail concluída. Verifique o e-mail " + ADMIN_EMAIL;
 }
 
 function handleRelatorio360(payload) {
