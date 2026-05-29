@@ -745,20 +745,27 @@ function getOrCreateRelatoriosFolder() {
   return DriveApp.createFolder(name);
 }
 
-function storePdfAndGetLink(base64, fileName) {
-  const folder = getOrCreateRelatoriosFolder();
-  const blob = Utilities.newBlob(
+function makePdfBlob(base64, fileName) {
+  return Utilities.newBlob(
     Utilities.base64Decode(base64),
     "application/pdf",
     fileName || ("Relatorio_" + new Date().getTime() + ".pdf")
   );
-  const file = folder.createFile(blob);
+}
+
+function storePdfBlobAndGetLink(pdfBlob) {
+  const folder = getOrCreateRelatoriosFolder();
+  const file = folder.createFile(pdfBlob);
   try {
     file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
   } catch (e) {
     // se a política da conta bloquear compartilhamento público, ainda retornamos URL interna
   }
   return file.getUrl();
+}
+
+function storePdfAndGetLink(base64, fileName) {
+  return storePdfBlobAndGetLink(makePdfBlob(base64, fileName));
 }
 
 function updateRelatorioLink(sessionId, email, linkUrl) {
@@ -1319,12 +1326,22 @@ function generateResetToken() {
 function sendDiscEmail(payload, sessionId, pin) {
   let reportLink = "";
   let reportFileName = payload.pdfFileName || "ImpulsoDisc.pdf";
+  let pdfBlob = null;
+  let driveError = "";
   try {
     const linkConvidado = `${URL_PAGINA_CONVIDADO}?id=${sessionId}`;
     const subject = `🎯 Seu Relatório DISC + Acesso 360° Espelho — ${payload.nome}`;
-    reportLink = storePdfAndGetLink(payload.pdfBase64, reportFileName);
-    updateRelatorioLink(sessionId, payload.email, reportLink);
-    updateDiscReportLink(sessionId, payload.email, reportLink, reportFileName, "RELATÓRIO GERADO");
+    pdfBlob = makePdfBlob(payload.pdfBase64, reportFileName);
+
+    try {
+      reportLink = storePdfBlobAndGetLink(pdfBlob);
+      updateRelatorioLink(sessionId, payload.email, reportLink);
+      updateDiscReportLink(sessionId, payload.email, reportLink, reportFileName, "LINK DO RELATÓRIO GERADO");
+    } catch (driveErr) {
+      driveError = "DRIVE: " + driveErr.message;
+      updateDiscReportLink(sessionId, payload.email, "", reportFileName, "ERRO AO GERAR LINK NO DRIVE: " + driveErr.message);
+      logEvent("DRIVE_ERROR", `sendDiscEmail: ${driveErr.message}`);
+    }
 
     const htmlBody = `
 <div style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto;background:#f4f9ff;padding:24px;border-radius:14px;">
@@ -1334,11 +1351,13 @@ function sendDiscEmail(payload, sessionId, pin) {
   </div>
   <div style="background:#fff;padding:24px;border-radius:12px;margin-top:16px;">
     <h2 style="color:#063b7a;margin:0 0 12px;">Olá, ${payload.nome}! 🎉</h2>
-    <p style="color:#334155;line-height:1.6;">Seu <strong>Relatório DISC Premium</strong> está pronto para download. Mas isso é só o começo!</p>
-    <p style="color:#334155;line-height:1.6;">
+    <p style="color:#334155;line-height:1.6;">Seu <strong>Relatório DISC Premium</strong> está pronto e segue anexado neste e-mail. Mas isso é só o começo!</p>
+    ${reportLink ? `<p style="color:#334155;line-height:1.6;">
       🔗 Link do seu relatório para download:
       <a href="${reportLink}" style="color:#0b63ce;font-weight:bold;">Abrir relatório PDF</a>
-    </p>
+    </p>` : `<p style="color:#92400e;line-height:1.6;background:#fffbeb;border-left:4px solid #f59e0b;padding:12px;border-radius:8px;">
+      O PDF está anexado neste e-mail. O link de download ainda não foi criado no Drive; a equipe Impulso foi notificada para verificar a autorização do Apps Script.
+    </p>`}
     <div style="background:linear-gradient(135deg,#fef3c7,#fde68a);border-left:5px solid #d97706;padding:18px;border-radius:10px;margin:20px 0;">
       <h3 style="color:#92400e;margin:0 0 10px;font-size:16px;">✨ NOVO: Acesso ao Impulso DISC 360°</h3>
       <p style="color:#451a03;margin:0;line-height:1.6;font-size:14px;">
@@ -1382,6 +1401,7 @@ function sendDiscEmail(payload, sessionId, pin) {
     try {
       GmailApp.sendEmail(payload.email, subject, "", {
         htmlBody,
+        attachments: [pdfBlob],
         name: "Instituto Impulso IE™",
         replyTo: ADMIN_EMAIL
       });
@@ -1390,21 +1410,42 @@ function sendDiscEmail(payload, sessionId, pin) {
     }
 
     try {
+      const adminHtml = `
+<div style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto;padding:20px;">
+  <h2 style="color:#063b7a;">Novo relatório DISC gerado</h2>
+  <p><strong>Nome:</strong> ${payload.nome}</p>
+  <p><strong>E-mail:</strong> ${payload.email}</p>
+  <p><strong>Perfil:</strong> ${payload.perfilPrimario}</p>
+  <p><strong>Session:</strong> ${sessionId}</p>
+  <p><strong>PIN:</strong> ${pin}</p>
+  ${reportLink ? `<p><strong>Link para baixar:</strong> <a href="${reportLink}">${reportLink}</a></p>` : `<p style="color:#b45309;"><strong>Atenção:</strong> não foi possível gerar o link no Drive. O PDF segue anexado.</p>`}
+  ${driveError ? `<p style="color:#b91c1c;"><strong>Erro Drive:</strong> ${driveError}</p>` : ""}
+</div>`;
       sendAdminEmail(`[Impulso] Novo DISC: ${payload.nome}`,
-        `Nome: ${payload.nome}\nEmail: ${payload.email}\nPerfil: ${payload.perfilPrimario}\nSession: ${sessionId}\nPIN: ${pin}\nLink relatório: ${reportLink}`);
+        `Nome: ${payload.nome}\nEmail: ${payload.email}\nPerfil: ${payload.perfilPrimario}\nSession: ${sessionId}\nPIN: ${pin}\nLink relatório: ${reportLink || "ERRO AO GERAR LINK NO DRIVE"}${driveError ? "\n" + driveError : ""}`,
+        {
+          htmlBody: adminHtml,
+          attachments: [pdfBlob],
+          name: "Instituto Impulso IE™",
+          replyTo: ADMIN_EMAIL
+        });
     } catch (adminErr) {
       emailErrors.push("ADMIN: " + adminErr.message);
     }
 
-    const finalStatus = emailErrors.length
-      ? "LINK GERADO - ERRO EMAIL: " + emailErrors.join(" | ")
-      : "LINK GERADO E EMAIL ENVIADO";
+    const finalStatus = driveError && emailErrors.length
+      ? "PDF GERADO - ERRO DRIVE/EMAIL: " + [driveError].concat(emailErrors).join(" | ")
+      : driveError
+        ? "PDF ENVIADO - ERRO LINK DRIVE: " + driveError
+        : emailErrors.length
+          ? "LINK GERADO - ERRO EMAIL: " + emailErrors.join(" | ")
+          : "LINK GERADO E EMAIL ENVIADO";
     updateDiscReportLink(sessionId, payload.email, reportLink, reportFileName, finalStatus);
     logEvent("DISC_EMAIL_OK", `${payload.email} | ${reportFileName} | ${reportLink}`);
-    if (emailErrors.length) {
-      logEvent("EMAIL_ERROR", "sendDiscEmail parcial: " + emailErrors.join(" | "));
+    if (driveError || emailErrors.length) {
+      logEvent("EMAIL_ERROR", "sendDiscEmail parcial: " + [driveError].concat(emailErrors).filter(Boolean).join(" | "));
     }
-    return { ok: emailErrors.length === 0, linkRelatorio: reportLink, error: emailErrors.join(" | ") };
+    return { ok: !driveError && emailErrors.length === 0, linkRelatorio: reportLink, error: [driveError].concat(emailErrors).filter(Boolean).join(" | ") };
   } catch (err) {
     updateDiscReportLink(sessionId, payload.email, reportLink, reportFileName, "ERRO GERAR LINK/EMAIL: " + err.message);
     logEvent("EMAIL_ERROR", "sendDiscEmail: " + err.message);
@@ -1439,9 +1480,18 @@ function handleRelatorio360(payload) {
     }
 
     const reportFileName = payload.pdfFileName || "Relatorio360.pdf";
-    const reportLink = storePdfAndGetLink(payload.pdfBase64, reportFileName);
-    updateRelatorioLink(payload.sessionId, payload.email, reportLink);
-    updateDiscReportLink(payload.sessionId, payload.email, reportLink, reportFileName, "RELATÓRIO 360 GERADO");
+    const pdfBlob = makePdfBlob(payload.pdfBase64, reportFileName);
+    let reportLink = "";
+    let driveError = "";
+    try {
+      reportLink = storePdfBlobAndGetLink(pdfBlob);
+      updateRelatorioLink(payload.sessionId, payload.email, reportLink);
+      updateDiscReportLink(payload.sessionId, payload.email, reportLink, reportFileName, "RELATÓRIO 360 GERADO");
+    } catch (driveErr) {
+      driveError = "DRIVE: " + driveErr.message;
+      updateDiscReportLink(payload.sessionId, payload.email, "", reportFileName, "ERRO AO GERAR LINK 360 NO DRIVE: " + driveErr.message);
+      logEvent("DRIVE_ERROR", "handleRelatorio360: " + driveErr.message);
+    }
 
     const subject = `🪞 Seu Relatório 360° Espelho — ${payload.nome || "Avaliado"}`;
     const htmlBody = `
@@ -1453,11 +1503,13 @@ function handleRelatorio360(payload) {
   <div style="background:#fff;padding:24px;border-radius:12px;margin-top:16px;">
     <h2 style="color:#063b7a;margin:0 0 12px;">Seu relatório comparativo está pronto</h2>
     <p style="color:#334155;line-height:1.6;">
-      Seu <strong>Relatório 360° Espelho</strong> está pronto para download, com a comparação entre autopercepção e visão externa.
+      Seu <strong>Relatório 360° Espelho</strong> está pronto e segue anexado neste e-mail, com a comparação entre autopercepção e visão externa.
     </p>
-    <p style="color:#334155;line-height:1.6;">
+    ${reportLink ? `<p style="color:#334155;line-height:1.6;">
       🔗 Link para download: <a href="${reportLink}" style="color:#0b63ce;font-weight:bold;">Abrir relatório PDF</a>
-    </p>
+    </p>` : `<p style="color:#92400e;line-height:1.6;background:#fffbeb;border-left:4px solid #f59e0b;padding:12px;border-radius:8px;">
+      O PDF está anexado neste e-mail. O link no Drive não foi gerado; verifique a coluna de status da planilha.
+    </p>`}
     <p style="color:#334155;line-height:1.6;">
       E-mail: <strong>${payload.email}</strong>
     </p>
@@ -1469,20 +1521,24 @@ function handleRelatorio360(payload) {
 
     GmailApp.sendEmail(payload.email, subject, "", {
       htmlBody,
+      attachments: [pdfBlob],
       name: "Instituto Impulso IE™",
       replyTo: ADMIN_EMAIL
     });
 
     sendAdminEmail(
       `[Impulso] Relatório 360° gerado: ${payload.nome || "Avaliado"}`,
-      `Relatório 360° gerado para ${payload.nome || "Avaliado"}\nEmail: ${payload.email}\nArquivo: ${reportFileName}\nLink relatório: ${reportLink}`,
+      `Relatório 360° gerado para ${payload.nome || "Avaliado"}\nEmail: ${payload.email}\nArquivo: ${reportFileName}\nLink relatório: ${reportLink || "ERRO AO GERAR LINK NO DRIVE"}${driveError ? "\n" + driveError : ""}`,
       {
+        attachments: [pdfBlob],
         name: "Instituto Impulso IE™"
       }
     );
 
+    const finalStatus = driveError ? "PDF 360 ENVIADO - ERRO LINK DRIVE: " + driveError : "RELATÓRIO 360 ENVIADO E LINK GERADO";
+    updateDiscReportLink(payload.sessionId, payload.email, reportLink, reportFileName, finalStatus);
     logEvent("RELATORIO_360_OK", `${payload.email} | ${reportFileName} | ${reportLink}`);
-    return jsonResponse({ ok: true, message: "Relatório 360° enviado com sucesso", linkRelatorio: reportLink });
+    return jsonResponse({ ok: !driveError, message: "Relatório 360° processado", linkRelatorio: reportLink, error: driveError });
   } catch (err) {
     logEvent("EMAIL_ERROR", "handleRelatorio360: " + err.message);
     return jsonResponse({ ok: false, error: err.message });
@@ -1496,9 +1552,18 @@ function handleRelatorioDisc(payload) {
     }
 
     const reportFileName = payload.pdfFileName || "RelatorioGeral_DISC.pdf";
-    const reportLink = storePdfAndGetLink(payload.pdfBase64, reportFileName);
-    updateRelatorioLink(payload.sessionId, payload.email, reportLink);
-    updateDiscReportLink(payload.sessionId, payload.email, reportLink, reportFileName, "RELATÓRIO COMPLETO GERADO");
+    const pdfBlob = makePdfBlob(payload.pdfBase64, reportFileName);
+    let reportLink = "";
+    let driveError = "";
+    try {
+      reportLink = storePdfBlobAndGetLink(pdfBlob);
+      updateRelatorioLink(payload.sessionId, payload.email, reportLink);
+      updateDiscReportLink(payload.sessionId, payload.email, reportLink, reportFileName, "RELATÓRIO COMPLETO GERADO");
+    } catch (driveErr) {
+      driveError = "DRIVE: " + driveErr.message;
+      updateDiscReportLink(payload.sessionId, payload.email, "", reportFileName, "ERRO AO GERAR LINK COMPLETO NO DRIVE: " + driveErr.message);
+      logEvent("DRIVE_ERROR", "handleRelatorioDisc: " + driveErr.message);
+    }
 
     const subject = `📄 Seu Relatório Geral DISC — ${payload.nome || "Avaliado"}`;
     const htmlBody = `
@@ -1510,11 +1575,13 @@ function handleRelatorioDisc(payload) {
   <div style="background:#fff;padding:24px;border-radius:12px;margin-top:16px;">
     <h2 style="color:#063b7a;margin:0 0 12px;">Seu relatório geral está pronto</h2>
     <p style="color:#334155;line-height:1.6;">
-      Seu <strong>Relatório Geral DISC</strong> está pronto para download, com a leitura comportamental completa.
+      Seu <strong>Relatório Geral DISC</strong> está pronto e segue anexado neste e-mail, com a leitura comportamental completa.
     </p>
-    <p style="color:#334155;line-height:1.6;">
+    ${reportLink ? `<p style="color:#334155;line-height:1.6;">
       🔗 Link para download: <a href="${reportLink}" style="color:#0b63ce;font-weight:bold;">Abrir relatório PDF</a>
-    </p>
+    </p>` : `<p style="color:#92400e;line-height:1.6;background:#fffbeb;border-left:4px solid #f59e0b;padding:12px;border-radius:8px;">
+      O PDF está anexado neste e-mail. O link no Drive não foi gerado; verifique a coluna de status da planilha.
+    </p>`}
     <p style="color:#334155;line-height:1.6;">
       E-mail: <strong>${payload.email}</strong>
     </p>
@@ -1526,20 +1593,24 @@ function handleRelatorioDisc(payload) {
 
     GmailApp.sendEmail(payload.email, subject, "", {
       htmlBody,
+      attachments: [pdfBlob],
       name: "Instituto Impulso IE™",
       replyTo: ADMIN_EMAIL
     });
 
     sendAdminEmail(
       `[Impulso] Relatório Geral DISC gerado: ${payload.nome || "Avaliado"}`,
-      `Relatório geral DISC gerado para ${payload.nome || "Avaliado"}\nEmail: ${payload.email}\nArquivo: ${reportFileName}\nLink relatório: ${reportLink}`,
+      `Relatório geral DISC gerado para ${payload.nome || "Avaliado"}\nEmail: ${payload.email}\nArquivo: ${reportFileName}\nLink relatório: ${reportLink || "ERRO AO GERAR LINK NO DRIVE"}${driveError ? "\n" + driveError : ""}`,
       {
+        attachments: [pdfBlob],
         name: "Instituto Impulso IE™"
       }
     );
 
+    const finalStatus = driveError ? "PDF COMPLETO ENVIADO - ERRO LINK DRIVE: " + driveError : "RELATÓRIO COMPLETO ENVIADO E LINK GERADO";
+    updateDiscReportLink(payload.sessionId, payload.email, reportLink, reportFileName, finalStatus);
     logEvent("RELATORIO_DISC_OK", `${payload.email} | ${reportFileName} | ${reportLink}`);
-    return jsonResponse({ ok: true, message: "Relatório geral enviado com sucesso", linkRelatorio: reportLink });
+    return jsonResponse({ ok: !driveError, message: "Relatório geral processado", linkRelatorio: reportLink, error: driveError });
   } catch (err) {
     logEvent("EMAIL_ERROR", "handleRelatorioDisc: " + err.message);
     return jsonResponse({ ok: false, error: err.message });
