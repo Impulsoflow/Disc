@@ -1441,6 +1441,7 @@ function handleRelatorio360(payload) {
     const reportFileName = payload.pdfFileName || "Relatorio360.pdf";
     const reportLink = storePdfAndGetLink(payload.pdfBase64, reportFileName);
     updateRelatorioLink(payload.sessionId, payload.email, reportLink);
+    updateDiscReportLink(payload.sessionId, payload.email, reportLink, reportFileName, "RELATÓRIO 360 GERADO");
 
     const subject = `🪞 Seu Relatório 360° Espelho — ${payload.nome || "Avaliado"}`;
     const htmlBody = `
@@ -1497,6 +1498,7 @@ function handleRelatorioDisc(payload) {
     const reportFileName = payload.pdfFileName || "RelatorioGeral_DISC.pdf";
     const reportLink = storePdfAndGetLink(payload.pdfBase64, reportFileName);
     updateRelatorioLink(payload.sessionId, payload.email, reportLink);
+    updateDiscReportLink(payload.sessionId, payload.email, reportLink, reportFileName, "RELATÓRIO COMPLETO GERADO");
 
     const subject = `📄 Seu Relatório Geral DISC — ${payload.nome || "Avaliado"}`;
     const htmlBody = `
