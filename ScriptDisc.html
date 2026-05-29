@@ -31,11 +31,11 @@ const ABA_LOGS = "Logs360";
 // ═══════════════════════════════════════════════════════════════════════
 function doPost(e) {
   try {
-    if (!e || !e.postData || !e.postData.contents) {
+    if (!e || ((!e.postData || !e.postData.contents) && !(e.parameter && e.parameter.payload))) {
       return jsonResponse({ ok: false, error: "Sem payload" });
     }
 
-    const payload = JSON.parse(e.postData.contents);
+    const payload = parsePostPayload(e);
     const action = payload.action || "saveDisc";
     if (!isPublicActionAllowed(action)) {
       logEvent("ACTION_BLOCKED", "POST action não permitida: " + action);
@@ -65,6 +65,22 @@ function doPost(e) {
   } catch (err) {
     logEvent("ERROR", "doPost: " + err.message);
     return jsonResponse({ ok: false, error: err.message });
+  }
+}
+
+function parsePostPayload(e) {
+  if (e && e.parameter && e.parameter.payload) {
+    return JSON.parse(e.parameter.payload);
+  }
+  const contents = e && e.postData ? String(e.postData.contents || "") : "";
+  try {
+    return JSON.parse(contents);
+  } catch (jsonErr) {
+    const match = contents.match(/(?:^|&)payload=([^&]*)/);
+    if (match && match[1]) {
+      return JSON.parse(decodeURIComponent(match[1].replace(/\+/g, " ")));
+    }
+    throw jsonErr;
   }
 }
 
