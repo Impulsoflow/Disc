@@ -365,19 +365,8 @@ function handleRequestDiscRetake(payload) {
       ""
     ]);
 
-    try {
-      sendAdminEmail(
-        "DISC — solicitação de nova avaliação",
-        "Nova solicitação DISC\n\nNome: " + (payload.nome || "Não informado") +
-        "\nE-mail: " + access.email +
-        "\nWhatsApp: " + access.whatsapp +
-        "\n\nPara liberar gratuitamente, na aba '" + ABA_SOLICITACOES_DISC +
-        "' altere o Status desta pessoa para LIBERADO_MANUAL."
-      );
-    } catch (emailErr) {
-      logEvent("EMAIL_ERROR", "requestDiscRetake: " + emailErr.message);
-    }
-
+    // A solicitação é gravada antes de qualquer outra ação para a pessoa
+    // receber resposta imediata. O gestor acompanha a aba Solicitações DISC.
     logEvent("DISC_RETAKE_REQUESTED", "email=" + access.email + " | whatsapp=" + access.whatsapp);
     return jsonResponse({ ok: true, requested: true });
   } catch (err) {
