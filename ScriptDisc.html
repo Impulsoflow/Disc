@@ -142,6 +142,8 @@ function doGet(e) {
       case "solicitar_reset_senha": resultText = handleSolicitarResetSenha(payload).getContent(); break;
       case "redefinir_senha":       resultText = handleRedefinirSenha(payload).getContent(); break;
       case "loginAvaliadoSenha":    resultText = handleLoginAvaliadoSenha(payload).getContent(); break;
+      case "validateDiscAccess":    resultText = handleValidateDiscAccess(payload).getContent(); break;
+      case "requestDiscRetake":     resultText = handleRequestDiscRetake(payload).getContent(); break;
       default:
         return jsonpResponse(callback, { ok: false, error: "Ação JSONP desconhecida: " + action });
     }
