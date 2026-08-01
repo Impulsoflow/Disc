@@ -3020,7 +3020,7 @@ let current2 = 0;
 const responses2 = new Array(TOTAL_Q).fill(null);
 let isTransitioning = false;
 
-function startTest() {
+async function startTest() {
   const name = document.getElementById("name").value.trim();
   const email = document.getElementById("email").value.trim();
   const whatsapp = document.getElementById("whatsapp").value.trim();
@@ -3047,13 +3047,51 @@ function startTest() {
     return;
   }
 
-  // ✅ Salva PIN global e continua
-  signupPin = pinForm;
-
   if (!name || !email || !whatsapp || !age || !prof || !edu) return;
-  showStep("step-quiz");
-  renderQuestion();
-  updateProgress();
+
+  const startButton = document.getElementById("start-btn");
+  const originalButtonText = startButton ? startButton.innerHTML : "";
+  if (startButton) {
+    startButton.disabled = true;
+    startButton.textContent = "Validando seu acesso...";
+  }
+
+  try {
+    const access = await callAppsScriptJsonp("validateDiscAccess", { email, whatsapp });
+    if (!access || !access.ok) {
+      throw new Error((access && access.error) || "Não foi possível validar o acesso agora.");
+    }
+    if (!access.allowed) {
+      const requestMessage = access.requestOpen
+        ? "Sua solicitação de nova avaliação já foi registrada. Você receberá as próximas instruções."
+        : "Esta avaliação já foi utilizada. Deseja solicitar uma nova avaliação?";
+      if (access.requestOpen) {
+        alert(requestMessage);
+        return;
+      }
+      if (confirm(requestMessage)) {
+        const request = await callAppsScriptJsonp("requestDiscRetake", { name, email, whatsapp });
+        if (!request || !request.ok) throw new Error((request && request.error) || "Não foi possível registrar sua solicitação.");
+        alert(request.alreadyRequested
+          ? "Sua solicitação de nova avaliação já foi registrada. Você receberá as próximas instruções."
+          : "Solicitação registrada. Você receberá as instruções para a nova avaliação.");
+      }
+      return;
+    }
+
+    // ✅ Salva PIN global e continua somente após a autorização do servidor.
+    signupPin = pinForm;
+    showStep("step-quiz");
+    renderQuestion();
+    updateProgress();
+  } catch (err) {
+    alert("Não conseguimos validar sua autorização agora. Tente novamente em instantes.\n\n" + (err && err.message ? err.message : ""));
+  } finally {
+    if (startButton) {
+      startButton.disabled = false;
+      startButton.innerHTML = originalButtonText || "Iniciar Pesquisa";
+    }
+  }
 }
 
 function renderQuestion() {

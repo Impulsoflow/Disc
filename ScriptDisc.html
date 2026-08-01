@@ -25,6 +25,7 @@ const ABA_DISC = "Respostas";
 const ABA_AVALIADOS = "Avaliados360";
 const ABA_CONVIDADOS = "Convidados360";
 const ABA_LOGS = "Logs360";
+const ABA_SOLICITACOES_DISC = "Solicitacoes DISC";
 
 // ═══════════════════════════════════════════════════════════════════════
 // 🚀 ENTRY POINT — POST
@@ -44,6 +45,8 @@ function doPost(e) {
 
     switch (action) {
       case "saveDisc":          return handleSaveDisc(payload);
+      case "validateDiscAccess": return handleValidateDiscAccess(payload);
+      case "requestDiscRetake":  return handleRequestDiscRetake(payload);
       case "createSession360":  return handleCreateSession360(payload);
       case "submitConvidado":   return handleSubmitConvidado(payload);
       case "loginAvaliado":     return handleLoginAvaliado(payload);
@@ -169,6 +172,8 @@ function jsonResponse(obj) {
 function isPublicActionAllowed(action) {
   return [
     "saveDisc",
+    "validateDiscAccess",
+    "requestDiscRetake",
     "createSession360",
     "submitConvidado",
     "loginAvaliado",
@@ -205,6 +210,17 @@ function handleSaveDisc(payload) {
     const ss = getSpreadsheet();
     let sheet = ss.getSheetByName(ABA_DISC);
 
+    // A proteção também é aplicada no salvamento, e não apenas na tela.
+    // Assim, não é possível burlar o bloqueio enviando um POST diretamente.
+    const access = getDiscRetakeEligibility(payload);
+    if (!access.allowed) {
+      return jsonResponse({
+        ok: false,
+        retakeRequired: true,
+        error: "Já existe uma avaliação DISC para estes dados. Solicite uma nova autorização."
+      });
+    }
+
     if (!sheet) {
       sheet = ss.insertSheet(ABA_DISC);
       sheet.appendRow([
@@ -237,6 +253,10 @@ function handleSaveDisc(payload) {
       Number(payload.exigenciaS) || 0,
       Number(payload.exigenciaC) || 0
     ]);
+
+    if (access.authorizationRow) {
+      consumeDiscRetakeAuthorization(access.authorizationRow);
+    }
 
     const pinInformado = String(payload.pin || "").trim();
     const pin = /^\d{6}$/.test(pinInformado) ? pinInformado : generatePin();
@@ -288,6 +308,149 @@ function handleSaveDisc(payload) {
     logEvent("ERROR", "saveDisc: " + err.message);
     return jsonResponse({ ok: false, error: err.message });
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// ACESSO ÚNICO — PILOTO DISC
+// Impede que um resultado já concluído seja feito novamente sem nova autorização.
+// A regra é validada no servidor, usando e-mail e WhatsApp normalizados.
+// ═══════════════════════════════════════════════════════════════════════
+function handleValidateDiscAccess(payload) {
+  try {
+    const access = getDiscRetakeEligibility(payload);
+    if (!access.allowed) {
+      logEvent("DISC_ACCESS_BLOCKED", "email=" + access.email + " | whatsapp=" + access.whatsapp);
+      return jsonResponse({
+        ok: true,
+        allowed: false,
+        purchaseRequired: true,
+        message: "Já existe uma avaliação DISC concluída para estes dados. Para realizar uma nova avaliação, solicite uma nova autorização.",
+        requestOpen: access.requestOpen
+      });
+    }
+
+    return jsonResponse({ ok: true, allowed: true });
+  } catch (err) {
+    logEvent("ERROR", "validateDiscAccess: " + err.message);
+    return jsonResponse({ ok: false, allowed: false, error: "Não foi possível validar o acesso agora." });
+  }
+}
+
+function handleRequestDiscRetake(payload) {
+  try {
+    const access = getDiscRetakeEligibility(payload);
+    if (!access.email || !access.whatsapp) {
+      return jsonResponse({ ok: false, error: "Informe e-mail e WhatsApp válidos." });
+    }
+    if (!access.hasPreviousResult) {
+      return jsonResponse({ ok: true, requestNeeded: false, allowed: true });
+    }
+    if (access.allowed) {
+      return jsonResponse({ ok: true, requestNeeded: false, allowed: true });
+    }
+    if (access.requestOpen) {
+      return jsonResponse({ ok: true, requestNeeded: false, alreadyRequested: true });
+    }
+
+    const sheet = getDiscRequestsSheet();
+    sheet.appendRow([
+      new Date(),
+      payload.nome || "",
+      access.email,
+      access.whatsapp,
+      "PENDENTE_PAGAMENTO",
+      "",
+      ""
+    ]);
+
+    try {
+      sendAdminEmail(
+        "DISC — solicitação de nova avaliação",
+        "Nova solicitação DISC\n\nNome: " + (payload.nome || "Não informado") +
+        "\nE-mail: " + access.email +
+        "\nWhatsApp: " + access.whatsapp +
+        "\n\nPara liberar gratuitamente, na aba '" + ABA_SOLICITACOES_DISC +
+        "' altere o Status desta pessoa para LIBERADO_MANUAL."
+      );
+    } catch (emailErr) {
+      logEvent("EMAIL_ERROR", "requestDiscRetake: " + emailErr.message);
+    }
+
+    logEvent("DISC_RETAKE_REQUESTED", "email=" + access.email + " | whatsapp=" + access.whatsapp);
+    return jsonResponse({ ok: true, requested: true });
+  } catch (err) {
+    logEvent("ERROR", "requestDiscRetake: " + err.message);
+    return jsonResponse({ ok: false, error: "Não foi possível registrar a solicitação agora." });
+  }
+}
+
+function getDiscRetakeEligibility(payload) {
+  const email = normalizeDiscEmail(payload.email);
+  const whatsapp = normalizeDiscWhatsapp(payload.whatsapp);
+  if (!email || !whatsapp) return { allowed: false, email: email, whatsapp: whatsapp };
+
+  const ss = getSpreadsheet();
+  const results = ss.getSheetByName(ABA_DISC);
+  const hasPreviousResult = !!(results && results.getLastRow() >= 2 && results
+    .getRange(2, 1, results.getLastRow() - 1, Math.min(results.getLastColumn(), 5))
+    .getValues()
+    .some(function(row) {
+      return normalizeDiscEmail(row[2]) === email || normalizeDiscWhatsapp(row[3]) === whatsapp;
+    }));
+
+  if (!hasPreviousResult) return { allowed: true, email: email, whatsapp: whatsapp, hasPreviousResult: false };
+
+  const requests = ss.getSheetByName(ABA_SOLICITACOES_DISC);
+  if (!requests || requests.getLastRow() < 2) {
+    return { allowed: false, email: email, whatsapp: whatsapp, hasPreviousResult: true, requestOpen: false };
+  }
+
+  const rows = requests.getRange(2, 1, requests.getLastRow() - 1, 7).getValues();
+  let authorizationRow = 0;
+  let requestOpen = false;
+  rows.forEach(function(row, index) {
+    const samePerson = normalizeDiscEmail(row[2]) === email || normalizeDiscWhatsapp(row[3]) === whatsapp;
+    if (!samePerson) return;
+    const status = String(row[4] || "").trim().toUpperCase();
+    if (status === "LIBERADO_MANUAL" || status === "PAGAMENTO_APROVADO") authorizationRow = index + 2;
+    if (status === "PENDENTE_PAGAMENTO") requestOpen = true;
+  });
+
+  return {
+    allowed: !!authorizationRow,
+    authorizationRow: authorizationRow,
+    email: email,
+    whatsapp: whatsapp,
+    hasPreviousResult: true,
+    requestOpen: requestOpen
+  };
+}
+
+function getDiscRequestsSheet() {
+  const ss = getSpreadsheet();
+  let sheet = ss.getSheetByName(ABA_SOLICITACOES_DISC);
+  if (!sheet) {
+    sheet = ss.insertSheet(ABA_SOLICITACOES_DISC);
+    sheet.appendRow([
+      "Solicitado em", "Nome", "E-mail", "WhatsApp", "Status", "Liberado em", "Consumido em"
+    ]);
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+function consumeDiscRetakeAuthorization(rowNumber) {
+  const sheet = getDiscRequestsSheet();
+  sheet.getRange(rowNumber, 5).setValue("UTILIZADO");
+  sheet.getRange(rowNumber, 7).setValue(new Date());
+}
+
+function normalizeDiscEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function normalizeDiscWhatsapp(value) {
+  return String(value || "").replace(/\D/g, "");
 }
 
 // ═══════════════════════════════════════════════════════════════════════
