@@ -13,6 +13,7 @@ const SPREADSHEET_ID = "14Dl9ALPNJgFKo63CbbrceEJm2Fc0iePB_0ZY-FZf3FY";
 const ADMIN_EMAIL = "impulsoflow@gmail.com";
 
 const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwwl82lCSU8x1-QYIO3W-JcO0UsuOXCdZACvcHaSdVyFMR2udcCNdDFKDyT5kYB2wORgQ/exec";
+const CENTRAL_ACCESS_URL = "https://impulso-pesquisas-admin.prrogeriobraga.chatgpt.site/api/access";
 
 const MIN_AVALIACOES_360 = 3;
 const VALIDADE_DIAS_360 = 90;
@@ -100,7 +101,7 @@ function doGet(e) {
       return ContentService
         .createTextOutput(JSON.stringify({
           service: "Impulso DISC 360°",
-          version: "2.3-email-link-fix",
+          version: "2.4-central-access-confirmed-save",
           status: "online",
           timestamp: new Date().toISOString()
         }))
@@ -130,6 +131,7 @@ function doGet(e) {
 
     let resultText;
     switch (action) {
+      case "saveDisc":         resultText = handleSaveDisc(payload).getContent(); break;
       case "consultar_360":     resultText = handleConsultar360(payload).getContent(); break;
       case "recuperar_pin_360": resultText = handleRecuperarPin360(payload).getContent(); break;
       case "loginAvaliado":     resultText = handleLoginAvaliado(payload).getContent(); break;
@@ -212,9 +214,12 @@ function handleSaveDisc(payload) {
     const ss = getSpreadsheet();
     let sheet = ss.getSheetByName(ABA_DISC);
 
-    // A proteção também é aplicada no salvamento, e não apenas na tela.
-    // Assim, não é possível burlar o bloqueio enviando um POST diretamente.
-    const access = getDiscRetakeEligibility(payload);
+    // O fluxo novo consome uma autorização assinada na Central. O fallback
+    // mantém compatibilidade com convites antigos ainda abertos.
+    const centralGrant = String(payload.centralAccessGrant || "").trim();
+    const access = centralGrant
+      ? consumeCentralDiscGrant(centralGrant)
+      : getDiscRetakeEligibility(payload);
     if (!access.allowed) {
       return jsonResponse({
         ok: false,
@@ -309,6 +314,26 @@ function handleSaveDisc(payload) {
   } catch (err) {
     logEvent("ERROR", "saveDisc: " + err.message);
     return jsonResponse({ ok: false, error: err.message });
+  }
+}
+
+function consumeCentralDiscGrant(grant) {
+  try {
+    const response = UrlFetchApp.fetch(CENTRAL_ACCESS_URL, {
+      method: "post",
+      contentType: "application/json",
+      payload: JSON.stringify({ action: "start", grant: grant }),
+      muteHttpExceptions: true
+    });
+    const status = response.getResponseCode();
+    const data = JSON.parse(response.getContentText() || "{}");
+    if (status < 200 || status >= 300 || !data.ok || !data.started) {
+      return { allowed: false, error: data.error || "Autorização central inválida." };
+    }
+    return { allowed: true, authorizationRow: 0 };
+  } catch (err) {
+    logEvent("CENTRAL_ACCESS_ERROR", "saveDisc: " + err.message);
+    return { allowed: false, error: "Não foi possível confirmar a autorização na Central." };
   }
 }
 

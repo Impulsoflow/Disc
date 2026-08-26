@@ -1897,10 +1897,10 @@
 
           <div id="final-success-message" class="success-box">
             <p style="margin:0; font-size:18px; font-family:Arial,sans-serif; font-weight:bold; color:#065f46;">
-              ✅ Relatório Gerado e Enviado para Processamento!
+              ✅ Resultado confirmado na planilha!
             </p>
             <p style="margin:6px 0 0; font-size:14px; color:#047857;">
-              Seu PDF foi gerado e enviado ao sistema para salvar o link na planilha e disparar os e-mails.<br>
+              A resposta foi salva com confirmação do servidor. O PDF foi enviado ao sistema para salvar o link e disparar os e-mails.<br>
               Se houver erro no Drive ou Gmail, ele aparecerá na coluna de status da planilha.
             </p>
           </div>
@@ -2440,6 +2440,7 @@
 
   const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwwl82lCSU8x1-QYIO3W-JcO0UsuOXCdZACvcHaSdVyFMR2udcCNdDFKDyT5kYB2wORgQ/exec";
   const API_KEY = "2026Impulso$";
+  const CENTRAL_ACCESS_URL = "https://impulso-pesquisas-admin.prrogeriobraga.chatgpt.site/api/access";
 
 /* 🆕 360° — URL base para o link dos convidados (ajuste conforme seu deploy) */
 const CONVIDADO_BASE_URL = "https://impulsoflow.github.io/ConvidadoDisc/";
@@ -2720,6 +2721,7 @@ let resultChart = null;
 let autoSendInProgress = false;
 let autoSendDone = false;
 let emailSendAttempts = 0;
+let discAccessGrant = "";
 const MAX_EMAIL_ATTEMPTS = 3;
 
 /* 🆕 360° — Estado do módulo 360° */
@@ -2852,6 +2854,19 @@ function callAppsScriptJsonp(action, payload, timeoutMs = 30000) {
     };
     document.head.appendChild(script);
   });
+}
+
+async function postCentralAccess(payload) {
+  const response = await fetch(CENTRAL_ACCESS_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {})
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || "Não foi possível validar o acesso na Central de Pesquisas.");
+  }
+  return data;
 }
 
 function showStep(stepId) {
@@ -3096,23 +3111,41 @@ async function startTest() {
   }
 
   try {
-    const access = await callAppsScriptJsonp("validateDiscAccess", { email, whatsapp });
-    if (!access || !access.ok) {
-      throw new Error((access && access.error) || "Não foi possível validar o acesso agora.");
-    }
-    if (!access.allowed) {
+    const context = { researchId: "disc", name, email, whatsapp };
+    const centralAccess = await postCentralAccess({ action: "validate", ...context });
+
+    if (!centralAccess.allowed) {
       const requestMessage = "Esta avaliação já foi utilizada. Deseja solicitar uma nova avaliação por R$ 35,00?";
-      if (access.requestOpen) {
+      if (centralAccess.requestOpen) {
         abrirPagamentoPix();
         return;
       }
       if (confirm(requestMessage)) {
-        const request = await callAppsScriptJsonp("requestDiscRetake", { name, email, whatsapp });
-        if (!request || !request.ok) throw new Error((request && request.error) || "Não foi possível registrar sua solicitação.");
+        await postCentralAccess({ action: "request", ...context });
         abrirPagamentoPix();
       }
       return;
     }
+
+    // Pessoas que concluíram o DISC antes da Central continuam contando como primeiro uso.
+    // A primeira validação na Central consulta a base legada e migra somente a marca de uso.
+    if (centralAccess.firstUse) {
+      const legacyAccess = await callAppsScriptJsonp("validateDiscAccess", { email, whatsapp });
+      if (!legacyAccess || !legacyAccess.ok) {
+        throw new Error((legacyAccess && legacyAccess.error) || "Não foi possível conferir o histórico do DISC.");
+      }
+      if (!legacyAccess.allowed) {
+        const requestMessage = "Esta avaliação já foi utilizada. Deseja solicitar uma nova avaliação por R$ 35,00?";
+        if (legacyAccess.requestOpen || confirm(requestMessage)) {
+          await postCentralAccess({ action: "request", legacyUsed: true, ...context });
+          abrirPagamentoPix();
+        }
+        return;
+      }
+    }
+
+    discAccessGrant = centralAccess.grant || "";
+    if (!discAccessGrant) throw new Error("A Central não emitiu a autorização da pesquisa.");
 
     // ✅ Salva PIN global e continua somente após a autorização do servidor.
     signupPin = pinForm;
@@ -3152,9 +3185,22 @@ async function copiarChavePix() {
   }
 }
 
-function informarPagamentoPix() {
+async function informarPagamentoPix() {
   const status = document.getElementById("pix-copy-status");
-  if (status) status.textContent = "✅ Pagamento informado. A nova pesquisa será liberada após a confirmação.";
+  const button = document.querySelector('#modal-pagamento-pix button[onclick="informarPagamentoPix()"]');
+  const name = document.getElementById("name").value.trim();
+  const email = document.getElementById("email").value.trim();
+  const whatsapp = document.getElementById("whatsapp").value.trim();
+  try {
+    if (button) button.disabled = true;
+    if (status) status.textContent = "Informando pagamento à Central...";
+    await postCentralAccess({ action: "payment-reported", researchId: "disc", name, email, whatsapp });
+    if (status) status.textContent = "✅ Pagamento informado. A nova pesquisa será liberada após a confirmação.";
+  } catch (err) {
+    if (status) status.textContent = "❌ " + (err && err.message ? err.message : "Não foi possível informar o pagamento.");
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 function renderQuestion() {
@@ -5577,17 +5623,41 @@ async function autoSendResult(scores, ranked) {
       exigenciaC: contextScores.C || 0,
       combinacao: first + second,
       pin: signupPin,
-      pdfBase64: base64,
-      pdfFileName: `ImpulsoDisc_${safeName}.pdf`,
-      sendEmail: true
+      centralAccessGrant: discAccessGrant,
+      sendAtivacao360Email: true,
+      sendEmail: false
     };
 
-    await postResultToScript(payload);
-    await wait(600);
+    const saved = await callAppsScriptJsonp("saveDisc", payload, 60000);
+    if (!saved || !saved.ok || !saved.sessionId) {
+      throw new Error((saved && saved.error) || "A planilha não confirmou o salvamento do resultado.");
+    }
 
     autoSendDone = true;
-    setAutoSendStatus("", "success");
+    discAccessGrant = "";
+    setAutoSendStatus("✅ Resultado confirmado na planilha. Processando o envio do PDF...", "success");
     document.getElementById("final-success-message").style.display = "block";
+
+    // O resultado já está confirmado. O PDF segue em uma segunda requisição,
+    // pois o tamanho do arquivo não cabe com segurança em uma chamada JSONP.
+    try {
+      await postResultToScript({
+        apiKey: API_KEY,
+        action: "relatorio_disc",
+        nome: payload.nome,
+        email: payload.email,
+        sessionId: saved.sessionId,
+        pin: saved.pin || signupPin,
+        pdfBase64: base64,
+        pdfFileName: `ImpulsoDisc_${safeName}.pdf`,
+        sendEmail: true,
+        notifyAdmin: true
+      });
+      setAutoSendStatus("✅ Resultado salvo. PDF enviado para processamento.", "success");
+    } catch (pdfError) {
+      console.error("Resultado salvo, mas o envio do PDF falhou:", pdfError);
+      setAutoSendStatus("⚠️ Resultado salvo na planilha. O envio do PDF precisa ser tentado novamente.", "error");
+    }
 
     /* 🆕 360° — Mostrar banner do Bônus 360° após sucesso do DISC */
     setTimeout(() => {
