@@ -2889,18 +2889,11 @@ async function postResultToScript(payload) {
   const body = JSON.stringify(payload);
   const hasLargePdf = !!payload.pdfBase64;
   if (hasLargePdf) {
-    try {
-      await fetch(WEB_APP_URL, {
-        method: "POST",
-        mode: "no-cors",
-        headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body
-      });
-      return { ok: true, transport: "fetch-no-cors-large-pdf" };
-    } catch (fetchError) {
-      console.warn("POST direto do PDF falhou, tentando formulário oculto...", fetchError);
-      return postResultViaHiddenForm(body);
-    }
+    // PDFs em base64 podem ser grandes. fetch(..., no-cors) devolve uma resposta
+    // opaca e não confirma que o Apps Script recebeu/processou o corpo.
+    // O backend já aceita e.parameter.payload, então usamos o formulário oculto
+    // como transporte principal para relatórios.
+    return postResultViaHiddenForm(body);
   }
   try {
     if (!hasLargePdf && navigator.sendBeacon) {
@@ -2939,22 +2932,21 @@ function postResultViaHiddenForm(body) {
     input.value = body;
     form.appendChild(input);
 
-    let done = false;
-    const cleanup = () => {
-      if (done) return;
-      done = true;
-      setTimeout(() => {
-        try { form.remove(); } catch (e) {}
-        try { iframe.remove(); } catch (e) {}
-      }, 1500);
-      resolve({ ok: true, transport: "form-post" });
-    };
-
-    iframe.onload = cleanup;
-    setTimeout(cleanup, 8000);
+    // Não removemos iframe/forma cedo: em celulares ou PDFs maiores o upload
+    // pode demorar. A submissão é disparada imediatamente e os elementos ficam
+    // vivos tempo suficiente para o Apps Script receber o corpo completo.
     document.body.appendChild(iframe);
     document.body.appendChild(form);
     form.submit();
+
+    setTimeout(() => {
+      resolve({ ok: true, transport: "form-post" });
+    }, 1500);
+
+    setTimeout(() => {
+      try { form.remove(); } catch (e) {}
+      try { iframe.remove(); } catch (e) {}
+    }, 60000);
   });
 }
 
