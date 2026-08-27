@@ -3127,21 +3127,17 @@ async function startTest() {
       return;
     }
 
-    // Pessoas que concluíram o DISC antes da Central continuam contando como primeiro uso.
-    // A primeira validação na Central consulta a base legada e migra somente a marca de uso.
-    if (centralAccess.firstUse) {
-      const legacyAccess = await callAppsScriptJsonp("validateDiscAccess", { email, whatsapp });
-      if (!legacyAccess || !legacyAccess.ok) {
-        throw new Error((legacyAccess && legacyAccess.error) || "Não foi possível conferir o histórico do DISC.");
+    const legacyAccess = await callAppsScriptJsonp("validateDiscAccess", { email, whatsapp });
+    if (!legacyAccess || !legacyAccess.ok) {
+      throw new Error((legacyAccess && legacyAccess.error) || "Não foi possível conferir o histórico do DISC.");
+    }
+    if (!legacyAccess.allowed) {
+      const requestMessage = "Esta avaliação já foi utilizada. Deseja solicitar uma nova avaliação por R$ 35,00?";
+      if (legacyAccess.requestOpen || confirm(requestMessage)) {
+        await postCentralAccess({ action: "request", legacyUsed: true, ...context });
+        abrirPagamentoPix();
       }
-      if (!legacyAccess.allowed) {
-        const requestMessage = "Esta avaliação já foi utilizada. Deseja solicitar uma nova avaliação por R$ 35,00?";
-        if (legacyAccess.requestOpen || confirm(requestMessage)) {
-          await postCentralAccess({ action: "request", legacyUsed: true, ...context });
-          abrirPagamentoPix();
-        }
-        return;
-      }
+      return;
     }
 
     discAccessGrant = centralAccess.grant || "";
@@ -5592,7 +5588,7 @@ async function autoSendResult(scores, ranked) {
   autoSendInProgress = true;
 
   try {
-    setAutoSendStatus("⏳ Salvando seu resultado DISC com segurança...", "pending");
+      setAutoSendStatus("⏳ Salvando seu resultado DISC com segurança...", "pending");
 
     const pcts = getPercentages(scores);
     const [first, second] = ranked;

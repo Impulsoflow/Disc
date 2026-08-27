@@ -214,17 +214,32 @@ function handleSaveDisc(payload) {
     const ss = getSpreadsheet();
     let sheet = ss.getSheetByName(ABA_DISC);
 
-    // O fluxo novo consome uma autorização assinada na Central. O fallback
-    // mantém compatibilidade com convites antigos ainda abertos.
     const centralGrant = String(payload.centralAccessGrant || "").trim();
-    const access = centralGrant
-      ? consumeCentralDiscGrant(centralGrant)
-      : getDiscRetakeEligibility(payload);
+    if (!centralGrant) {
+      return jsonResponse({
+        ok: false,
+        retakeRequired: true,
+        error: "Autorização ausente ou expirada. Reinicie a pesquisa pela tela inicial."
+      });
+    }
+
+    const access = consumeCentralDiscGrant(centralGrant);
     if (!access.allowed) {
       return jsonResponse({
         ok: false,
         retakeRequired: true,
         error: access.error || "Já existe uma avaliação DISC para estes dados. Solicite uma nova autorização."
+      });
+    }
+
+    const legacyAccess = getDiscRetakeEligibility(payload);
+    if (!legacyAccess.allowed) {
+      return jsonResponse({
+        ok: false,
+        retakeRequired: true,
+        error: legacyAccess.requestOpen
+          ? "Já existe uma avaliação DISC para estes dados. Solicite a liberação da nova autorização."
+          : "Já existe uma avaliação DISC para estes dados. Solicite uma nova autorização."
       });
     }
 
