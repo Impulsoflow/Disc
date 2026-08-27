@@ -18,8 +18,9 @@ test("records access before showing the DISC questionnaire", () => {
   assert.match(page, /startedAccess\.phase !== "INICIADO"/);
 });
 
-test("accepts one Central-approved retake and finalizes the grant on save", () => {
+test("accepts one Central-approved retake and finalizes in the client after saving", () => {
   assert.match(script, /legacyAccess\.hasPreviousResult && !access\.retakeAuthorized && !legacyAccess\.allowed/);
-  assert.match(script, /data\.phase !== "UTILIZADO"/);
-  assert.match(script, /retakeAuthorized: data\.retakeAuthorized === true/);
+  assert.match(script, /retakeAuthorized: payload\.centralRetakeAuthorized === true/);
+  assert.match(page, /action: "start", grant: discAccessGrant/);
+  assert.match(page, /completedAccess\.phase !== "UTILIZADO"/);
 });

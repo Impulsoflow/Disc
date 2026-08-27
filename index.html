@@ -2722,6 +2722,7 @@ let autoSendInProgress = false;
 let autoSendDone = false;
 let emailSendAttempts = 0;
 let discAccessGrant = "";
+let discRetakeAuthorized = false;
 const MAX_EMAIL_ATTEMPTS = 3;
 
 /* 🆕 360° — Estado do módulo 360° */
@@ -3146,6 +3147,7 @@ async function startTest() {
     if (!startedAccess.started || startedAccess.phase !== "INICIADO") {
       throw new Error("Não foi possível registrar o início da pesquisa.");
     }
+    discRetakeAuthorized = startedAccess.retakeAuthorized === true;
 
     // ✅ Salva PIN global e continua somente após a autorização do servidor.
     signupPin = pinForm;
@@ -5622,6 +5624,7 @@ async function autoSendResult(scores, ranked) {
       combinacao: first + second,
       pin: signupPin,
       centralAccessGrant: discAccessGrant,
+      centralRetakeAuthorized: discRetakeAuthorized,
       sendAtivacao360Email: true,
       sendEmail: false
     };
@@ -5631,9 +5634,29 @@ async function autoSendResult(scores, ranked) {
       throw new Error((saved && saved.error) || "A planilha não confirmou o salvamento do resultado.");
     }
 
+    // A cobrança/uso já foi registrado antes do questionário. A finalização na
+    // Central acontece pelo mesmo navegador (sem depender de permissão extra
+    // do Apps Script) e nunca desfaz um resultado já salvo.
+    let centralCompletionError = null;
+    try {
+      const completedAccess = await postCentralAccess({ action: "start", grant: discAccessGrant });
+      if (!completedAccess.started || completedAccess.phase !== "UTILIZADO") {
+        throw new Error((completedAccess && completedAccess.error) || "A Central não confirmou a finalização.");
+      }
+    } catch (completionError) {
+      centralCompletionError = completionError;
+      console.warn("Resultado DISC salvo; confirmação final da Central pendente:", completionError);
+    }
+
     autoSendDone = true;
     discAccessGrant = "";
-    setAutoSendStatus("✅ Resultado confirmado na planilha. Processando o envio do PDF...", "success");
+    discRetakeAuthorized = false;
+    setAutoSendStatus(
+      centralCompletionError
+        ? "✅ Resultado salvo com segurança. A confirmação administrativa será conciliada automaticamente."
+        : "✅ Resultado confirmado na planilha. Processando o envio do PDF...",
+      "success"
+    );
     document.getElementById("final-success-message").style.display = "block";
 
     // O resultado já está confirmado. Somente agora geramos o PDF. Em celulares,

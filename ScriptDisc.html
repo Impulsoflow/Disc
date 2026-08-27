@@ -223,14 +223,13 @@ function handleSaveDisc(payload) {
       });
     }
 
-    const access = consumeCentralDiscGrant(centralGrant);
-    if (!access.allowed) {
-      return jsonResponse({
-        ok: false,
-        retakeRequired: true,
-        error: access.error || "Já existe uma avaliação DISC para estes dados. Solicite uma nova autorização."
-      });
-    }
+    // A Central já registrou o início antes do questionário. Nesta etapa o
+    // Apps Script apenas persiste o resultado: ele não depende de uma chamada
+    // externa para não travar um cliente que já concluiu a pesquisa.
+    const access = {
+      allowed: true,
+      retakeAuthorized: payload.centralRetakeAuthorized === true
+    };
 
     const legacyAccess = getDiscRetakeEligibility(payload);
     if (legacyAccess.hasPreviousResult && !access.retakeAuthorized && !legacyAccess.allowed) {
@@ -329,28 +328,6 @@ function handleSaveDisc(payload) {
   } catch (err) {
     logEvent("ERROR", "saveDisc: " + err.message);
     return jsonResponse({ ok: false, error: err.message });
-  }
-}
-
-function consumeCentralDiscGrant(grant) {
-  try {
-    const response = UrlFetchApp.fetch(CENTRAL_ACCESS_URL, {
-      method: "post",
-      contentType: "application/json",
-      payload: JSON.stringify({ action: "start", grant: grant }),
-      muteHttpExceptions: true
-    });
-    const status = response.getResponseCode();
-    const bodyText = String(response.getContentText() || "");
-    const data = JSON.parse(bodyText || "{}");
-    if (status < 200 || status >= 300 || !data.ok || !data.started || data.phase !== "UTILIZADO") {
-      const detail = data.error || bodyText.slice(0, 220) || "Autorização central inválida.";
-      return { allowed: false, error: `Central respondeu ${status}: ${detail}` };
-    }
-    return { allowed: true, retakeAuthorized: data.retakeAuthorized === true };
-  } catch (err) {
-    logEvent("CENTRAL_ACCESS_ERROR", "saveDisc: " + err.message);
-    return { allowed: false, error: "Não foi possível confirmar a autorização na Central." };
   }
 }
 
