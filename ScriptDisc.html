@@ -224,7 +224,7 @@ function handleSaveDisc(payload) {
       return jsonResponse({
         ok: false,
         retakeRequired: true,
-        error: "Já existe uma avaliação DISC para estes dados. Solicite uma nova autorização."
+        error: access.error || "Já existe uma avaliação DISC para estes dados. Solicite uma nova autorização."
       });
     }
 
@@ -326,9 +326,11 @@ function consumeCentralDiscGrant(grant) {
       muteHttpExceptions: true
     });
     const status = response.getResponseCode();
-    const data = JSON.parse(response.getContentText() || "{}");
+    const bodyText = String(response.getContentText() || "");
+    const data = JSON.parse(bodyText || "{}");
     if (status < 200 || status >= 300 || !data.ok || !data.started) {
-      return { allowed: false, error: data.error || "Autorização central inválida." };
+      const detail = data.error || bodyText.slice(0, 220) || "Autorização central inválida.";
+      return { allowed: false, error: `Central respondeu ${status}: ${detail}` };
     }
     return { allowed: true, authorizationRow: 0 };
   } catch (err) {
@@ -1639,7 +1641,12 @@ function sendDiscEmail(payload, sessionId, pin, codigo360) {
     if (driveError || emailErrors.length) {
       logEvent("EMAIL_ERROR", "sendDiscEmail parcial: " + [driveError].concat(emailErrors).filter(Boolean).join(" | "));
     }
-    return { ok: !driveError && emailErrors.length === 0, linkRelatorio: reportLink, error: [driveError].concat(emailErrors).filter(Boolean).join(" | ") };
+    return {
+      ok: emailErrors.length === 0,
+      linkRelatorio: reportLink,
+      error: [driveError].concat(emailErrors).filter(Boolean).join(" | "),
+      warning: driveError || ""
+    };
   } catch (err) {
     updateDiscReportLink(sessionId, payload.email, reportLink, reportFileName, "ERRO GERAR LINK/EMAIL: " + err.message);
     logEvent("EMAIL_ERROR", "sendDiscEmail: " + err.message);
@@ -1732,7 +1739,13 @@ function handleRelatorio360(payload) {
     const finalStatus = driveError ? "PDF 360 ENVIADO - ERRO LINK DRIVE: " + driveError : "RELATÓRIO 360 ENVIADO E LINK GERADO";
     updateDiscReportLink(payload.sessionId, payload.email, reportLink, reportFileName, finalStatus);
     logEvent("RELATORIO_360_OK", `${payload.email} | ${reportFileName} | ${reportLink}`);
-    return jsonResponse({ ok: !driveError, message: "Relatório 360° processado", linkRelatorio: reportLink, error: driveError });
+    return jsonResponse({
+      ok: true,
+      message: "Relatório 360° processado",
+      linkRelatorio: reportLink,
+      error: driveError,
+      warning: driveError || ""
+    });
   } catch (err) {
     logEvent("EMAIL_ERROR", "handleRelatorio360: " + err.message);
     return jsonResponse({ ok: false, error: err.message });
@@ -1804,7 +1817,13 @@ function handleRelatorioDisc(payload) {
     const finalStatus = driveError ? "PDF COMPLETO ENVIADO - ERRO LINK DRIVE: " + driveError : "RELATÓRIO COMPLETO ENVIADO E LINK GERADO";
     updateDiscReportLink(payload.sessionId, payload.email, reportLink, reportFileName, finalStatus);
     logEvent("RELATORIO_DISC_OK", `${payload.email} | ${reportFileName} | ${reportLink}`);
-    return jsonResponse({ ok: !driveError, message: "Relatório geral processado", linkRelatorio: reportLink, error: driveError });
+    return jsonResponse({
+      ok: true,
+      message: "Relatório geral processado",
+      linkRelatorio: reportLink,
+      error: driveError,
+      warning: driveError || ""
+    });
   } catch (err) {
     logEvent("EMAIL_ERROR", "handleRelatorioDisc: " + err.message);
     return jsonResponse({ ok: false, error: err.message });

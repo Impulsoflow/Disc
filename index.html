@@ -5672,6 +5672,11 @@ async function autoSendResult(scores, ranked) {
   } catch(e) {
     emailSendAttempts++;
     console.error("Falha no envio:", e);
+    const accessFailure = /autoriz|acesso|retake|central/i.test(String(e && e.message ? e.message : e));
+    if (accessFailure) {
+      setAutoSendStatus(`❌ ${e.message || "Falha de autorização no envio automático."}`, "error");
+      return;
+    }
     if (emailSendAttempts < MAX_EMAIL_ATTEMPTS) {
       setAutoSendStatus(`⚠️ Tentando novamente (${emailSendAttempts}/${MAX_EMAIL_ATTEMPTS})...`, "error");
       autoSendInProgress = false;
