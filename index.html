@@ -3114,6 +3114,11 @@ async function startTest() {
     const context = { researchId: "disc", name, email, whatsapp };
     const centralAccess = await postCentralAccess({ action: "validate", ...context });
 
+    if (centralAccess.inProgress) {
+      alert(centralAccess.message || "Você já tem uma avaliação DISC em andamento.");
+      return;
+    }
+
     if (!centralAccess.allowed) {
       const requestMessage = "Esta avaliação já foi utilizada. Deseja solicitar uma nova avaliação por R$ 35,00?";
       if (centralAccess.requestOpen) {
