@@ -5592,10 +5592,8 @@ async function autoSendResult(scores, ranked) {
   autoSendInProgress = true;
 
   try {
-    setAutoSendStatus("⏳ Gerando seu relatório DISC premium em PDF...", "pending");
+    setAutoSendStatus("⏳ Salvando seu resultado DISC com segurança...", "pending");
 
-    const doc = await generatePDF(scores, ranked);
-    const base64 = doc.output("datauristring").split(",")[1];
     const pcts = getPercentages(scores);
     const [first, second] = ranked;
     const formattedName = toTitleCase(document.getElementById("name").value.trim());
@@ -5638,9 +5636,12 @@ async function autoSendResult(scores, ranked) {
     setAutoSendStatus("✅ Resultado confirmado na planilha. Processando o envio do PDF...", "success");
     document.getElementById("final-success-message").style.display = "block";
 
-    // O resultado já está confirmado. O PDF segue em uma segunda requisição,
-    // pois o tamanho do arquivo não cabe com segurança em uma chamada JSONP.
+    // O resultado já está confirmado. Somente agora geramos o PDF. Em celulares,
+    // essa etapa pode exigir muita memória; uma falha aqui nunca apaga a pesquisa.
     try {
+      setAutoSendStatus("✅ Resultado confirmado. Gerando o PDF para envio...", "success");
+      const doc = await generatePDF(scores, ranked);
+      const base64 = doc.output("datauristring").split(",")[1];
       await postResultToScript({
         apiKey: API_KEY,
         action: "relatorio_disc",
@@ -5656,7 +5657,7 @@ async function autoSendResult(scores, ranked) {
       setAutoSendStatus("✅ Resultado salvo. PDF enviado para processamento.", "success");
     } catch (pdfError) {
       console.error("Resultado salvo, mas o envio do PDF falhou:", pdfError);
-      setAutoSendStatus("⚠️ Resultado salvo na planilha. O envio do PDF precisa ser tentado novamente.", "error");
+      setAutoSendStatus("✅ Resultado salvo na planilha. O PDF não foi enviado, mas sua pesquisa está segura.", "success");
     }
 
     /* 🆕 360° — Mostrar banner do Bônus 360° após sucesso do DISC */
