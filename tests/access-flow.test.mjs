@@ -24,3 +24,14 @@ test("accepts one Central-approved retake and finalizes in the client after savi
   assert.match(page, /action: "start", grant: discAccessGrant/);
   assert.match(page, /completedAccess\.phase !== "UTILIZADO"/);
 });
+
+
+test("sends large report PDFs through the Apps Script form transport", () => {
+  const fnStart = page.indexOf("async function postResultToScript(payload)");
+  const fnEnd = page.indexOf("function postResultViaHiddenForm(body)", fnStart);
+  const transportBlock = page.slice(fnStart, fnEnd);
+  assert.ok(fnStart >= 0 && fnEnd > fnStart, "report transport functions must exist");
+  assert.match(transportBlock, /if \(hasLargePdf\)[\s\S]*return postResultViaHiddenForm\(body\)/);
+  assert.doesNotMatch(transportBlock, /fetch-no-cors-large-pdf/);
+  assert.match(page, /setTimeout\(\(\) => \{[\s\S]*form\.remove\(\)[\s\S]*iframe\.remove\(\)[\s\S]*\}, 60000\)/);
+});
