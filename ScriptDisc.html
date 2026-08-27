@@ -233,7 +233,7 @@ function handleSaveDisc(payload) {
     }
 
     const legacyAccess = getDiscRetakeEligibility(payload);
-    if (!legacyAccess.allowed) {
+    if (legacyAccess.hasPreviousResult && !access.retakeAuthorized && !legacyAccess.allowed) {
       return jsonResponse({
         ok: false,
         retakeRequired: true,
@@ -276,8 +276,8 @@ function handleSaveDisc(payload) {
       Number(payload.exigenciaC) || 0
     ]);
 
-    if (access.authorizationRow) {
-      consumeDiscRetakeAuthorization(access.authorizationRow);
+    if (legacyAccess.authorizationRow) {
+      consumeDiscRetakeAuthorization(legacyAccess.authorizationRow);
     }
 
     const pinInformado = String(payload.pin || "").trim();
@@ -343,11 +343,11 @@ function consumeCentralDiscGrant(grant) {
     const status = response.getResponseCode();
     const bodyText = String(response.getContentText() || "");
     const data = JSON.parse(bodyText || "{}");
-    if (status < 200 || status >= 300 || !data.ok || !data.started) {
+    if (status < 200 || status >= 300 || !data.ok || !data.started || data.phase !== "UTILIZADO") {
       const detail = data.error || bodyText.slice(0, 220) || "Autorização central inválida.";
       return { allowed: false, error: `Central respondeu ${status}: ${detail}` };
     }
-    return { allowed: true, authorizationRow: 0 };
+    return { allowed: true, retakeAuthorized: data.retakeAuthorized === true };
   } catch (err) {
     logEvent("CENTRAL_ACCESS_ERROR", "saveDisc: " + err.message);
     return { allowed: false, error: "Não foi possível confirmar a autorização na Central." };

@@ -3114,39 +3114,38 @@ async function startTest() {
     const context = { researchId: "disc", name, email, whatsapp };
     const centralAccess = await postCentralAccess({ action: "validate", ...context });
 
-    if (centralAccess.inProgress) {
-      alert(centralAccess.message || "Você já tem uma avaliação DISC em andamento.");
+    if (!centralAccess.allowed) {
+      if (!centralAccess.requestOpen) {
+        await postCentralAccess({ action: "request", ...context });
+      }
+      abrirPagamentoPix();
       return;
     }
 
-    if (!centralAccess.allowed) {
-      const requestMessage = "Esta avaliação já foi utilizada. Deseja solicitar uma nova avaliação por R$ 35,00?";
-      if (centralAccess.requestOpen) {
+    // Migra somente pesquisas antigas ainda ausentes na Central. Uma
+    // reaplicação já aprovada na Central não depende de uma segunda liberação
+    // paralela na planilha legada.
+    if (centralAccess.firstUse) {
+      const legacyAccess = await callAppsScriptJsonp("validateDiscAccess", { email, whatsapp });
+      if (!legacyAccess || !legacyAccess.ok) {
+        throw new Error((legacyAccess && legacyAccess.error) || "Não foi possível conferir o histórico do DISC.");
+      }
+      if (!legacyAccess.allowed) {
+        await postCentralAccess({ action: "request", legacyUsed: true, ...context });
         abrirPagamentoPix();
         return;
       }
-      if (confirm(requestMessage)) {
-        await postCentralAccess({ action: "request", ...context });
-        abrirPagamentoPix();
-      }
-      return;
-    }
-
-    const legacyAccess = await callAppsScriptJsonp("validateDiscAccess", { email, whatsapp });
-    if (!legacyAccess || !legacyAccess.ok) {
-      throw new Error((legacyAccess && legacyAccess.error) || "Não foi possível conferir o histórico do DISC.");
-    }
-    if (!legacyAccess.allowed) {
-      const requestMessage = "Esta avaliação já foi utilizada. Deseja solicitar uma nova avaliação por R$ 35,00?";
-      if (legacyAccess.requestOpen || confirm(requestMessage)) {
-        await postCentralAccess({ action: "request", legacyUsed: true, ...context });
-        abrirPagamentoPix();
-      }
-      return;
     }
 
     discAccessGrant = centralAccess.grant || "";
     if (!discAccessGrant) throw new Error("A Central não emitiu a autorização da pesquisa.");
+
+    // Mesma regra de Gestão, IGA e Forças de Caráter: o uso é registrado no
+    // clique em Iniciar, antes de exibir a primeira pergunta.
+    const startedAccess = await postCentralAccess({ action: "start", grant: discAccessGrant });
+    if (!startedAccess.started || startedAccess.phase !== "INICIADO") {
+      throw new Error("Não foi possível registrar o início da pesquisa.");
+    }
 
     // ✅ Salva PIN global e continua somente após a autorização do servidor.
     signupPin = pinForm;
